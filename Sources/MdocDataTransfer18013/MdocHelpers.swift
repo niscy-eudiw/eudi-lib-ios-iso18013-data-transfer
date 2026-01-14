@@ -194,7 +194,7 @@ public class MdocHelpers {
 		} // end doc for
 		let documentErrors: [DocumentError]? = docErrors.count == 0 ? nil : docErrors.map(DocumentError.init(docErrors:))
 		let documentsToAdd = docFiltered.count == 0 ? nil : docFiltered
-		let deviceResponseToSend = DeviceResponse(version: DeviceResponse.defaultVersion, documents: documentsToAdd, documentErrors: documentErrors, status: 0)
+		let deviceResponseToSend = DeviceResponse(documents: documentsToAdd, documentErrors: documentErrors, status: 0)
 		return (deviceResponseToSend, validReqItemsDocDict, errorReqItemsDocDict, resMetadata)
 	}
 
