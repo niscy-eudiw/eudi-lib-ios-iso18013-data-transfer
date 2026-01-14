@@ -40,6 +40,7 @@ public class MdocGattServer: @unchecked Sendable, ObservableObject {
 	public var iaca: [SecCertificate]!
 	public var privateKeyObjects: [String: CoseKeyPrivate]!
 	public var dauthMethod: DeviceAuthMethod
+	public var zkSystemRepository: ZkSystemRepository?
 	public var readerName: String?
 	public var qrCodePayload: String?
 	public weak var delegate: (any MdocOfflineDelegate)?
@@ -330,7 +331,7 @@ public class MdocGattServer: @unchecked Sendable, ObservableObject {
 		if let items {
 			do {
 				let docTypeReq = deviceRequest?.docRequests.first?.itemsRequest.docType ?? ""
-				guard let (drToSend, _, _, resMetadata) = try await MdocHelpers.getDeviceResponseToSend(deviceRequest: deviceRequest!, issuerSigned: docs, docMetadata: docMetadata.compactMapValues { $0 }, selectedItems: items, sessionEncryption: sessionEncryption, eReaderKey: sessionEncryption!.sessionKeys.publicKey, privateKeyObjects: privateKeyObjects, dauthMethod: dauthMethod, unlockData: unlockData) else {
+				guard let (drToSend, _, _, resMetadata) = try await MdocHelpers.getDeviceResponseToSend(deviceRequest: deviceRequest!, issuerSigned: docs, docMetadata: docMetadata.compactMapValues { $0 }, selectedItems: items, sessionEncryption: sessionEncryption, eReaderKey: sessionEncryption!.sessionKeys.publicKey, privateKeyObjects: privateKeyObjects, dauthMethod: dauthMethod, unlockData: unlockData, zkSystemRepository: zkSystemRepository) else {
 					errorToSend = MdocHelpers.getErrorNoDocuments(docTypeReq)
 					return
 				}
