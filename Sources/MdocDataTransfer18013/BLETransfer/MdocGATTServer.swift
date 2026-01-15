@@ -75,6 +75,7 @@ public class MdocGattServer: @unchecked Sendable, ObservableObject {
 		self.privateKeyObjects = objs.privateKeyObjects
 		self.iaca = objs.iaca
 		self.dauthMethod = objs.deviceAuthMethod
+		self.zkSystemRepository = objs.zkSystemRepository
 		status = .initialized
 		initPeripheralManager()
 		initSuccess = true
