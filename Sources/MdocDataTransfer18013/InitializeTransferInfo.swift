@@ -4,7 +4,7 @@ import MdocSecurity18013
 
 public struct InitializeTransferData: Sendable {
 
-	public init(dataFormats: [String: String], documentData: [String: Data], documentKeyIndexes: [String: Int], docMetadata: [String: Data?], docDisplayNames: [String: [String: [String: String]]?], docKeyInfos: [String: Data?], trustedCertificates: [Data], deviceAuthMethod: String, idsToDocTypes: [String: String], hashingAlgs: [String: String]) {
+	public init(dataFormats: [String: String], documentData: [String: Data], documentKeyIndexes: [String: Int], docMetadata: [String: Data?], docDisplayNames: [String: [String: [String: String]]?], docKeyInfos: [String: Data?], trustedCertificates: [Data], deviceAuthMethod: String, idsToDocTypes: [String: String], hashingAlgs: [String: String], zkSystemRepository: ZkSystemRepository? = nil) {
         self.dataFormats = dataFormats
         self.documentData = documentData
 		self.documentKeyIndexes = documentKeyIndexes
@@ -15,6 +15,7 @@ public struct InitializeTransferData: Sendable {
         self.deviceAuthMethod = deviceAuthMethod
         self.idsToDocTypes = idsToDocTypes
 		self.hashingAlgs = hashingAlgs
+        self.zkSystemRepository = zkSystemRepository
     }
     public let dataFormats: [String: String]
     /// doc-id to document data
@@ -35,6 +36,8 @@ public struct InitializeTransferData: Sendable {
     public let idsToDocTypes: [String: String]
 	/// document-id to hashing algorithm
 	var hashingAlgs: [String: String]
+    // optional zk system repository
+    public let zkSystemRepository: ZkSystemRepository?
 
     public func toInitializeTransferInfo() -> InitializeTransferInfo {
         // filter data and private keys by format
@@ -48,7 +51,7 @@ public struct InitializeTransferData: Sendable {
 		let dataFormats = Dictionary(uniqueKeysWithValues: dataFormats.map { k,v in (k, DocDataFormat(rawValue: v)) }).compactMapValues { $0 }
         let iaca = trustedCertificates.map { SecCertificateCreateWithData(nil, $0 as CFData)! }
         let deviceAuthMethod = DeviceAuthMethod(rawValue: deviceAuthMethod) ?? .deviceMac
-		return InitializeTransferInfo(dataFormats: dataFormats, documentObjects: documentObjects, docMetadata: docMetadata, docDisplayNames: docDisplayNames, privateKeyObjects: privateKeyObjects, iaca: iaca, deviceAuthMethod: deviceAuthMethod, idsToDocTypes: idsToDocTypes, hashingAlgs: hashingAlgs)
+		return InitializeTransferInfo(dataFormats: dataFormats, documentObjects: documentObjects, docMetadata: docMetadata, docDisplayNames: docDisplayNames, privateKeyObjects: privateKeyObjects, iaca: iaca, deviceAuthMethod: deviceAuthMethod, idsToDocTypes: idsToDocTypes, hashingAlgs: hashingAlgs, zkSystemRepository: zkSystemRepository)
     }
 }
 
@@ -71,4 +74,6 @@ public struct InitializeTransferInfo {
     public let idsToDocTypes: [String: String]
 			// document-id to hashing algorithm
 	public let hashingAlgs:[String: String]
+    // optional zk system repository
+    public let zkSystemRepository: ZkSystemRepository?
 }
