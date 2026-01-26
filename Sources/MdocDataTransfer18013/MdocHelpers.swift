@@ -254,7 +254,7 @@ public class MdocHelpers {
     public static func findMatchedZkSystem(document: Document, zkRequest: ZkRequest, zkSystemRepository: ZkSystemRepository) -> (any ZkSystemProtocol, ZkSystemSpec)? {
         guard !zkRequest.systemSpecs.isEmpty else { return nil }
         return zkRequest.systemSpecs.lazy.compactMap { zkSpec -> (any ZkSystemProtocol, ZkSystemSpec)? in
-            guard let system = zkSystemRepository.lookup(zkSpec.system) else { return nil }           
+            guard let system = zkSystemRepository.lookup(zkSpec.system) else { return nil }
             let numAttributes = Int64(numAttributesRequested(for: document))
 			guard let spec = system.getMatchingSystemSpec(zkSystemSpecs: zkRequest.systemSpecs, numAttributesRequested: numAttributes) else { return nil }
             return (system, spec) }.first
@@ -277,11 +277,17 @@ public class MdocHelpers {
 				documents2.append(document)
 				continue
 			}
+			let dr = documents.count == 1 ? deviceResponse : getSingleDocumentDeviceResponse(document: document)
+			let docBytes = dr.toCBOR(options: CBOROptions()).encode()
 			// Generate ZkDocument
-			if let zkDocument = try? zkSystem.generateProof(zkSystemSpec: zkSpec, document: document, sessionTranscriptBytes: sessionTranscript.taggedEncoded.encode(options: CBOROptions()), timestamp: Date()) { zkDocuments.append(zkDocument) } else { documents2.append(document) }
+			if let zkDocument = try? zkSystem.generateProof(zkSystemSpec: zkSpec, docBytes: docBytes, x: nil, y: nil, sessionTranscriptBytes: sessionTranscript.taggedEncoded.encode(options: CBOROptions()), timestamp: Date()) { zkDocuments.append(zkDocument) } else { documents2.append(document) }
 		}
 		guard !zkDocuments.isEmpty else { return deviceResponse }
 		return DeviceResponse(documents: documents2, zkDocuments: zkDocuments, documentErrors: deviceResponse.documentErrors, status: deviceResponse.status)
+	}
+
+	public static func getSingleDocumentDeviceResponse(document: Document) -> DeviceResponse {
+		return DeviceResponse(documents: [document], documentErrors: nil, status: 0)
 	}
 
 	#if os(iOS)
