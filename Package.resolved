@@ -7,7 +7,7 @@
       "location" : "https://github.com/niscy-eudiw/eudi-lib-ios-iso18013-data-model.git",
       "state" : {
         "branch" : "main",
-        "revision" : "08e854f65bf2905f126bed1415104c2526ccb6ec"
+        "revision" : "562b42cdbab2a68c63182bf155e3edb02225cfad"
       }
     },
     {
@@ -60,8 +60,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-log.git",
       "state" : {
-        "revision" : "7ee16e465622412764b0ff0c1301801dc71b8f61",
-        "version" : "1.9.0"
+        "revision" : "2778fd4e5a12a8aaa30a3ee8285f4ce54c5f3181",
+        "version" : "1.9.1"
       }
     },
     {
@@ -69,8 +69,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/niscy-eudiw/SwiftCBOR.git",
       "state" : {
-        "revision" : "7d6271345212f3864309666b6eb9f9941be6873d",
-        "version" : "0.6.3"
+        "revision" : "a663e7a6bd50d2224223ed60622b531b18499dd0",
+        "version" : "0.6.4"
       }
     }
   ],
