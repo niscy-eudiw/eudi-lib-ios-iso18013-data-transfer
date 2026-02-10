@@ -19,8 +19,15 @@ let package = Package(
         // Targets are the basic building blocks of a package, defining a module or a test suite.
         // Targets can depend on other targets in this package and products from dependencies.
         .target(
-            name: "MdocDataTransfer18013", dependencies: [
-				.product(name: "MdocSecurity18013", package: "eudi-lib-ios-iso18013-security")]),
+            name: "MdocDataTransfer18013", 
+            dependencies: [
+				.product(name: "MdocSecurity18013", package: "eudi-lib-ios-iso18013-security")
+            ],
+            swiftSettings: [
+        		.enableUpcomingFeature("InferIsolatedConformances"),
+        		.enableUpcomingFeature("NonisolatedNonsendingByDefault")
+    		],
+        ),
         .testTarget(
             name: "MdocDataTransfer18013Tests",
             dependencies: ["MdocDataTransfer18013"]),

@@ -178,8 +178,9 @@ public class MdocGattServer: @unchecked Sendable, ObservableObject {
 			error = MdocHelpers.makeError(code: .unexpected_error, str: error?.localizedDescription ?? "Not initialized!")
 			return
 		}
-		deviceEngagement = DeviceEngagement(isBleServer: true, rfus: rfus)
-		try await deviceEngagement!.makePrivateKey(crv: crv, secureArea: secureArea)
+		var engagement = DeviceEngagement(isBleServer: true, rfus: rfus)
+		try await engagement?.makePrivateKey(crv: crv, secureArea: secureArea)
+		deviceEngagement = engagement
 		sessionEncryption = nil
 #if os(iOS)
 		qrCodePayload = deviceEngagement!.getQrCodePayload()
@@ -232,14 +233,8 @@ public class MdocGattServer: @unchecked Sendable, ObservableObject {
 			advertising = true
 			status = .qrEngagementReady
 		} else {
-		// once bt is powered on, advertise
-		if peripheralManager.state == .resetting {
-			DispatchQueue.main.asyncAfter(deadline: .now()+1) {
-				self.startBleAdvertising()
-			}
-		} else {
-			logger.info("Peripheral manager powered off")
-		}
+			// once bt is powered on, advertise
+			if peripheralManager.state == .resetting {self.startBleAdvertising() } else { logger.info("Peripheral manager powered off") }
 		}
 	}
 
@@ -254,10 +249,8 @@ public class MdocGattServer: @unchecked Sendable, ObservableObject {
 		advertising = false
 		subscribeCount = 0
 		if let pk = deviceEngagement?.privateKey {
-			Task { @MainActor in
-				try? await pk.secureArea.deleteKeyBatch(id: pk.privateKeyId, startIndex: 0, batchSize: 1)
-				deviceEngagement?.privateKey = nil
-			}
+			Task { try? await pk.secureArea.deleteKeyBatch(id: pk.privateKeyId, startIndex: 0, batchSize: 1) }
+			deviceEngagement?.privateKey = nil
 		}
 		if status == .error && initSuccess {
 			status = .initializing
@@ -320,9 +313,7 @@ public class MdocGattServer: @unchecked Sendable, ObservableObject {
 		defer {
 			logger.info("Prepare \(bytesToSend.0.count) bytes to send")
 			prepareDataToSend(bytesToSend.0)
-			DispatchQueue.main.asyncAfter(deadline: .now()+0.2) {
-				self.sendDataWithUpdates()
-			}
+			self.sendDataWithUpdates()
 		}
 		if !b {
 			errorToSend = MdocHelpers.makeError(code: .userRejected)
