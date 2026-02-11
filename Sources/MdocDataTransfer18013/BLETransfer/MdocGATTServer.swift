@@ -336,7 +336,7 @@ public class MdocGattServer: @unchecked Sendable, ObservableObject {
 					errorToSend = MdocHelpers.getErrorNoDocuments(docTypeReq)
 					return
 				}
-				guard let dts = drToSend.documents, !dts.isEmpty else {
+				guard !drToSend.documents.isNilOrEmpty || !drToSend.zkDocuments.isNilOrEmpty else {
 					errorToSend = MdocHelpers.getErrorNoDocuments(docTypeReq)
 					return
 				}
