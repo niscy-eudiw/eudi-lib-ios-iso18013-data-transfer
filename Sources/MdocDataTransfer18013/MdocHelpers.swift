@@ -280,7 +280,7 @@ public class MdocHelpers {
 			let dr = documents.count == 1 ? deviceResponse : getSingleDocumentDeviceResponse(document: document)
 			let docBytes = dr.toCBOR(options: CBOROptions()).encode()
 			// Generate ZkDocument
-			if let zkDocument = try? zkSystem.generateProof(zkSystemSpec: zkSpec, docBytes: docBytes, x: nil, y: nil, sessionTranscriptBytes: sessionTranscript.taggedEncoded.encode(options: CBOROptions()), timestamp: Date()) { zkDocuments.append(zkDocument) } else { documents2.append(document) }
+			if let zkDocument = try? zkSystem.generateProof(zkSystemSpec: zkSpec, docBytes: docBytes, x: nil, y: nil, sessionTranscriptBytes: sessionTranscript.encode(options: CBOROptions()), timestamp: Date()) { zkDocuments.append(zkDocument) } else { documents2.append(document) }
 		}
 		guard !zkDocuments.isEmpty else { return deviceResponse }
 		return DeviceResponse(documents: documents2, zkDocuments: zkDocuments, documentErrors: deviceResponse.documentErrors, status: deviceResponse.status)
