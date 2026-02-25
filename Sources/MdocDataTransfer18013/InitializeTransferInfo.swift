@@ -1,6 +1,7 @@
 import Foundation
 import MdocDataModel18013
 import MdocSecurity18013
+import struct WalletStorage.Document
 
 public struct InitializeTransferData: Sendable {
 
@@ -17,17 +18,18 @@ public struct InitializeTransferData: Sendable {
 		self.hashingAlgs = hashingAlgs
         self.zkSystemRepository = zkSystemRepository
     }
-    public let dataFormats: [String: String]
+    /// doc-id to data format
+    public let dataFormats: [Document.ID: String]
     /// doc-id to document data
-    public let documentData: [String: Data]
+    public let documentData: [Document.ID: Data]
 	/// doc-id to document key indexes
-	public let documentKeyIndexes: [String: Int]
+	public let documentKeyIndexes: [Document.ID: Int]
 	/// document-id to doc-metadata map
-	public let docMetadata: [String: Data?]
+	public let docMetadata: [Document.ID: Data?]
 	/// document-id to doc.fields display names
-	public let docDisplayNames: [String: [String: [String: String]]?]
+	public let docDisplayNames: [Document.ID: [String: [String: String]]?]
     /// doc-id to private key info
-    public let docKeyInfos: [String: Data?]
+    public let docKeyInfos: [Document.ID: Data?]
     /// trusted certificates
     public let trustedCertificates: [Data]
     /// device auth method
@@ -47,7 +49,7 @@ public struct InitializeTransferData: Sendable {
 			return ($0.key, CoseKeyPrivate(privateKeyId: $0.key, index: keyIndex, secureArea: SecureAreaRegistry.shared.get(name: dki.secureAreaName)))
 		})
 		let documentObjects = documentData
-		let docMetadata = docMetadata.compactMapValues { DocMetadata(from: $0) }
+		let docMetadata = docMetadata.compactMapValues { $0 }
 		let dataFormats = Dictionary(uniqueKeysWithValues: dataFormats.map { k,v in (k, DocDataFormat(rawValue: v)) }).compactMapValues { $0 }
         let iaca = trustedCertificates.map { SecCertificateCreateWithData(nil, $0 as CFData)! }
         let deviceAuthMethod = DeviceAuthMethod(rawValue: deviceAuthMethod) ?? .deviceMac
@@ -57,23 +59,23 @@ public struct InitializeTransferData: Sendable {
 
 public struct InitializeTransferInfo {
     /// doc-id to data format
-    public let dataFormats: [String: DocDataFormat]
+    public let dataFormats: [Document.ID: DocDataFormat]
     /// doc-id to document objects
-    public let documentObjects: [String: Data]
+    public let documentObjects: [Document.ID: Data]
 	/// document-id to doc-metadata map
-	public let docMetadata: [String: DocMetadata]
-	// doc-id to doc.fields display names
-	public let docDisplayNames: [String: [String: [String: String]]?]
+	public let docMetadata: [Document.ID: Data]
+	/// doc-id to doc.fields display names
+	public let docDisplayNames: [Document.ID: [String: [String: String]]?]
     /// doc-id to private key objects
-    public let privateKeyObjects: [String: CoseKeyPrivate]
+    public let privateKeyObjects: [Document.ID: CoseKeyPrivate]
     /// trusted certificates
     public let iaca: [SecCertificate]
     /// device auth method
     public let deviceAuthMethod: DeviceAuthMethod
-        // document-id to document type map
-    public let idsToDocTypes: [String: String]
-			// document-id to hashing algorithm
-	public let hashingAlgs:[String: String]
+	// document-id to document type map
+    public let idsToDocTypes: [Document.ID: DocType]
+	// document-id to hashing algorithm
+	public let hashingAlgs:[Document.ID: String]
     // optional zk system repository
     public let zkSystemRepository: ZkSystemRepository?
 }
