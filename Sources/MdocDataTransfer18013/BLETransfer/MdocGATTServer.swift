@@ -24,6 +24,7 @@ import UIKit
 import Logging
 import MdocDataModel18013
 import MdocSecurity18013
+import struct WalletStorage.Document
 
 /// BLE Gatt server implementation of mdoc transfer manager
 public class MdocGattServer: @unchecked Sendable, ObservableObject {
@@ -35,10 +36,10 @@ public class MdocGattServer: @unchecked Sendable, ObservableObject {
 	public var deviceEngagement: DeviceEngagement?
 	public var deviceRequest: DeviceRequest?
 	public var sessionEncryption: SessionEncryption?
-	public var docs: [String: IssuerSigned]!
-	public var docMetadata: [String: Data?]!
+	public var docs: [Document.ID: IssuerSigned]!
+	public var docMetadata: [Document.ID: Data?]!
 	public var iaca: [SecCertificate]!
-	public var privateKeyObjects: [String: CoseKeyPrivate]!
+	public var privateKeyObjects: [Document.ID: CoseKeyPrivate]!
 	public var dauthMethod: DeviceAuthMethod
 	public var zkSystemRepository: ZkSystemRepository?
 	public var readerName: String?
@@ -62,6 +63,7 @@ public class MdocGattServer: @unchecked Sendable, ObservableObject {
 	public var deviceResponseBytes: Data?
 	/// response metadata array
 	public var responseMetadata: [Data?]!
+	public var zkpDocumentIds: [String]!
 	var readBuffer = Data()
 	var sendBuffer = [Data]()
 	var numBlocks: Int = 0
@@ -332,7 +334,7 @@ public class MdocGattServer: @unchecked Sendable, ObservableObject {
 		if let items {
 			do {
 				let docTypeReq = deviceRequest?.docRequests.first?.itemsRequest.docType ?? ""
-				guard let (drToSend, _, _, resMetadata) = try await MdocHelpers.getDeviceResponseToSend(deviceRequest: deviceRequest!, issuerSigned: docs, docMetadata: docMetadata.compactMapValues { $0 }, selectedItems: items, sessionEncryption: sessionEncryption, eReaderKey: sessionEncryption!.sessionKeys.publicKey, privateKeyObjects: privateKeyObjects, dauthMethod: dauthMethod, unlockData: unlockData, zkSystemRepository: zkSystemRepository) else {
+				guard let (drToSend, _, _, resMetadata, resZkpDocIds) = try await MdocHelpers.getDeviceResponseToSend(deviceRequest: deviceRequest!, issuerSigned: docs, docMetadata: docMetadata.compactMapValues { $0 }, selectedItems: items, sessionEncryption: sessionEncryption, eReaderKey: sessionEncryption!.sessionKeys.publicKey, privateKeyObjects: privateKeyObjects, dauthMethod: dauthMethod, unlockData: unlockData, zkSystemRepository: zkSystemRepository) else {
 					errorToSend = MdocHelpers.getErrorNoDocuments(docTypeReq)
 					return
 				}
@@ -346,6 +348,7 @@ public class MdocGattServer: @unchecked Sendable, ObservableObject {
 					bytesToSend = bytes
 					deviceResponseBytes = bytes.1
 					responseMetadata = resMetadata
+					zkpDocumentIds = resZkpDocIds
 				case .failure(let err):
 					errorToSend = err
 					return
