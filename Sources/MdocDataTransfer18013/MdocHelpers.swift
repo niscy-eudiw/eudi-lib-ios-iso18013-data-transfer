@@ -28,7 +28,7 @@ import SwiftCBOR
 import Logging
 import X509
 
-public typealias RequestItems = [String: [NameSpace: [RequestItem]]]
+public typealias RequestItems = [DocType: [NameSpace: [RequestItem]]]
 
 /// Helper methods
 public class MdocHelpers {
@@ -85,7 +85,7 @@ public class MdocHelpers {
 			guard var sessionEncryption else { logger.error("Session Encryption not initialized"); return .failure(Self.makeError(code: .sessionEncryptionNotInitialized)) }
 			let requestData = try await sessionEncryption.decrypt(requestCipherData)
 			let deviceRequest = try DeviceRequest(data: requestData)
-			guard let (drTest, validRequestItems, _, _) = try await Self.getDeviceResponseToSend(deviceRequest: deviceRequest, issuerSigned: docs, docMetadata: docMetadata, selectedItems: nil, sessionEncryption: sessionEncryption, eReaderKey: sessionEncryption.sessionKeys.publicKey, privateKeyObjects: privateKeyObjects, dauthMethod: dauthMethod, unlockData: unlockData) else { logger.error("Valid request items nil"); return .failure(Self.makeError(code: .requestDecodeError)) }
+			guard let (drTest, validRequestItems, _, _, _) = try await Self.getDeviceResponseToSend(deviceRequest: deviceRequest, issuerSigned: docs, docMetadata: docMetadata, selectedItems: nil, sessionEncryption: sessionEncryption, eReaderKey: sessionEncryption.sessionKeys.publicKey, privateKeyObjects: privateKeyObjects, dauthMethod: dauthMethod, unlockData: unlockData) else { logger.error("Valid request items nil"); return .failure(Self.makeError(code: .requestDecodeError)) }
 			let bInvalidReq = (drTest.documents == nil)
 			var userRequestInfo = UserRequestInfo(docDataFormats: docs.mapValues { _ in .cbor }, itemsRequested: validRequestItems, deviceRequestBytes: Data(requestData))
 			if let docR = deviceRequest.docRequests.first {
@@ -113,10 +113,13 @@ public class MdocHelpers {
 	///   - sessionTranscript: Session Transcript object
 	///   - dauthMethod: Mdoc Authentication method
 	/// - Returns: (Device response object, valid requested items, error request items) tuple
-	public static func getDeviceResponseToSend(deviceRequest: DeviceRequest?, issuerSigned: [String: IssuerSigned], docMetadata: [String: Data], selectedItems: RequestItems? = nil, sessionEncryption: SessionEncryption? = nil, eReaderKey: CoseKey? = nil, privateKeyObjects: [String: CoseKeyPrivate], sessionTranscript: SessionTranscript? = nil, dauthMethod: DeviceAuthMethod, unlockData: [String: Data]) async throws -> (deviceResponse: DeviceResponse, validRequestItems: RequestItems, errorRequestItems: RequestItems, responseMetadata: [Data?])? {
-		var docFiltered = [Document](); var docErrors = [[DocType: UInt64]]()
-		var validReqItemsDocDict = RequestItems(); var errorReqItemsDocDict = RequestItems(); var resMetadata = [Data?]()
+	public static func getDeviceResponseToSend(deviceRequest: DeviceRequest?, issuerSigned: [String: IssuerSigned], docMetadata: [String: Data], selectedItems: RequestItems? = nil, sessionEncryption: SessionEncryption? = nil, eReaderKey: CoseKey? = nil, privateKeyObjects: [String: CoseKeyPrivate], sessionTranscript: SessionTranscript? = nil, dauthMethod: DeviceAuthMethod, unlockData: [String: Data], zkSpecsRequested: [DocType: [ZkSystemSpec]]? = nil, zkSystemRepository: ZkSystemRepository? = nil) async throws -> (deviceResponse: DeviceResponse, validRequestItems: RequestItems, errorRequestItems: RequestItems, responseMetadata: [Data?], zkpDocumentIds: [String])? {
+		var docFiltered = [Document](); var docIdsFiltered = [String]();
+		var docErrors = [[DocType: UInt64]]()
+		var validReqItemsDocDict = RequestItems(); var errorReqItemsDocDict = RequestItems()
+		var resMetadata = [Data?]()
 		guard deviceRequest != nil || selectedItems != nil else { fatalError("Invalid call") }
+		let sessionTranscript = sessionEncryption?.sessionTranscript ?? sessionTranscript
 		let haveSelectedItems = selectedItems != nil
 		// doc.id's (if have selected items), otherwise doc.types
 		let reqDocIdsOrDocTypes = if haveSelectedItems { Array(selectedItems!.keys) } else { deviceRequest!.docRequests.map(\.itemsRequest.docType) }
@@ -174,7 +177,6 @@ public class MdocHelpers {
 				let issuerAuthToAdd = doc.issuerAuth
 				let issToAdd = IssuerSigned(issuerNameSpaces: IssuerNameSpaces(nameSpaces: nsItemsToAdd), issuerAuth: issuerAuthToAdd)
 				var devSignedToAdd: DeviceSigned? = nil
-				let sessionTranscript = sessionEncryption?.sessionTranscript ?? sessionTranscript
 				if let sessionTranscript, let privateKeyObject {
 					let authKeys = CoseKeyExchange(publicKey: eReaderKey, privateKey: privateKeyObject)
 					let mdocAuth = MdocAuthentication(sessionTranscript: sessionTranscript, authKeys: authKeys)
@@ -186,6 +188,7 @@ public class MdocHelpers {
 				guard let devSignedToAdd else { logger.error("Cannot create device signed"); continue }
 				let docToAdd = Document(docType: doc.issuerAuth.mso.docType, issuerSigned: issToAdd, deviceSigned: devSignedToAdd, errors: errors)
 				docFiltered.append(docToAdd)
+				docIdsFiltered.append(reqDocIdOrDocType)
 				validReqItemsDocDict[doc.issuerAuth.mso.docType] = validReqItemsNsDict
 			} else {
 				docErrors.append([doc.issuerAuth.mso.docType: UInt64(0)])
@@ -194,8 +197,19 @@ public class MdocHelpers {
 		} // end doc for
 		let documentErrors: [DocumentError]? = docErrors.count == 0 ? nil : docErrors.map(DocumentError.init(docErrors:))
 		let documentsToAdd = docFiltered.count == 0 ? nil : docFiltered
-		let deviceResponseToSend = DeviceResponse(version: DeviceResponse.defaultVersion, documents: documentsToAdd, documentErrors: documentErrors, status: 0)
-		return (deviceResponseToSend, validReqItemsDocDict, errorReqItemsDocDict, resMetadata)
+		var deviceResponseToSend = DeviceResponse(documents: documentsToAdd, documentErrors: documentErrors, status: 0)
+		var zkpDocumentIds = [String]()
+		if let zkSystemRepository, let sessionTranscript, haveSelectedItems, docFiltered.count > 0 {
+			let zkSpecsByDocType = zkSpecsRequested ?? deviceRequest?.docRequests.reduce(into: [:]) { result, docReq in
+				if let specs = docReq.itemsRequest.requestInfo?.zkRequest?.systemSpecs {
+					result[docReq.itemsRequest.docType] = specs
+				}
+			}
+			if let zkSpecsByDocType {
+				(deviceResponseToSend, zkpDocumentIds) = try await transformDeviceResponseWithZkp(zkSystemRepository: zkSystemRepository, zkSpecsByDocType: zkSpecsByDocType, deviceResponse: deviceResponseToSend, sessionTranscript: sessionTranscript, docIdsFiltered: docIdsFiltered)
+			}
+		}
+		return (deviceResponseToSend, validReqItemsDocDict, errorReqItemsDocDict, resMetadata, zkpDocumentIds)
 	}
 
 	/// Returns the number of blocks that dataLength bytes of data can be split into, given a maximum block size of maxBlockSize bytes.
@@ -233,6 +247,65 @@ public class MdocHelpers {
 		}
 		let chunk = data.subdata(in: start..<end)
 		return (chunk,bEnd)
+	}
+
+	/// Returns the number of attributes requested in a document
+	/// - Parameter document: The document to count attributes from
+	/// - Returns: The number of requested attributes
+	public static func numAttributesRequested(for document: Document) -> Int {
+		guard let issuerNs = document.issuerSigned.issuerNameSpaces else { return 0 }
+		return issuerNs.nameSpaces.values.reduce(0) { $0 + $1.count }
+	}
+
+	/// Find the matched zero-knowledge proof system for the DocRequest.
+    ///
+    /// - Parameters:
+    ///   - zkSystemRepository: the zero-knowledge proof system repository
+    /// - Returns: the matched zero-knowledge proof system and its specification, or nil if none found
+    public static func findMatchedZkSystem(document: Document, zkSystemSpecs: [ZkSystemSpec], zkSystemRepository: ZkSystemRepository) -> (any ZkSystemProtocol, ZkSystemSpec)? {
+        guard !zkSystemSpecs.isEmpty else { return nil }
+        return zkSystemSpecs.lazy.compactMap { zkSpec -> (any ZkSystemProtocol, ZkSystemSpec)? in
+            guard let system = zkSystemRepository.lookup(zkSpec.system) else { return nil }
+            let numAttributes = Int64(numAttributesRequested(for: document))
+			guard let spec = system.getMatchingSystemSpec(zkSystemSpecs: zkSystemSpecs, numAttributesRequested: numAttributes) else { return nil }
+            return (system, spec) }.first
+    }
+
+	/// Transform a DeviceResponse by replacing Documents with ZkDocuments where applicable
+	///
+	/// - Parameters:
+	///   - zkSystemRepository: The zero-knowledge proof system repository
+	///   - zkSpecsByDocType: Map of document type to its zero-knowledge system specs
+	///   - deviceResponse: The device response to transform
+	///   - sessionTranscript: The session transcript
+	/// - Returns: A transformed DeviceResponse with ZkDocuments where applicable
+	public static func transformDeviceResponseWithZkp(zkSystemRepository: ZkSystemRepository, zkSpecsByDocType: [DocType: [ZkSystemSpec]], deviceResponse: DeviceResponse, sessionTranscript: SessionTranscript, docIdsFiltered: [String]) async throws -> (DeviceResponse, [String]) {
+		var zkpDocumentIds = [String]()
+		guard let documents = deviceResponse.documents else { return (deviceResponse, zkpDocumentIds) }
+		var documents2 = [Document]()
+		var zkDocuments = [ZkDocument]()
+		for (index, document) in documents.enumerated() {
+			// Find matching ZK system specs for this document's docType
+			guard let zkSystemSpecs = zkSpecsByDocType[document.docType], let (zkSystem, zkSpec) = findMatchedZkSystem(document: document, zkSystemSpecs: zkSystemSpecs, zkSystemRepository: zkSystemRepository) else {
+				documents2.append(document)
+				continue
+			}
+			let dr = documents.count == 1 ? deviceResponse : getSingleDocumentDeviceResponse(document: document)
+			let docBytes = dr.toCBOR(options: CBOROptions()).encode()
+			// Generate ZkDocument
+			if let zkDocument = try? zkSystem.generateProof(zkSystemSpec: zkSpec, docBytes: docBytes, x: nil, y: nil, sessionTranscriptBytes: sessionTranscript.encode(options: CBOROptions()), timestamp: Date()) {
+				zkDocuments.append(zkDocument)
+				zkpDocumentIds.append(docIdsFiltered[index])
+			} else {
+				documents2.append(document)
+			}
+		}
+		guard !zkDocuments.isEmpty else { return (deviceResponse, zkpDocumentIds) }
+		return (DeviceResponse(documents: documents2, zkDocuments: zkDocuments, documentErrors: deviceResponse.documentErrors, status: deviceResponse.status), zkpDocumentIds)
+	}
+
+	public static func getSingleDocumentDeviceResponse(document: Document) -> DeviceResponse {
+		return DeviceResponse(documents: [document], documentErrors: nil, status: 0)
 	}
 
 	#if os(iOS)
@@ -330,4 +403,10 @@ public class MdocHelpers {
 			}
 			return dn
 		}
+}
+
+extension Optional where Wrapped: Collection {
+    var isNilOrEmpty: Bool {
+        return self?.isEmpty ?? true
+    }
 }

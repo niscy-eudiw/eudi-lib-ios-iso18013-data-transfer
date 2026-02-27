@@ -40,6 +40,7 @@ public class MdocGattServer: @unchecked Sendable, ObservableObject {
 	public var iaca: [SecCertificate]!
 	public var privateKeyObjects: [String: CoseKeyPrivate]!
 	public var dauthMethod: DeviceAuthMethod
+	public var zkSystemRepository: ZkSystemRepository?
 	public var readerName: String?
 	public var qrCodePayload: String?
 	public weak var delegate: (any MdocOfflineDelegate)?
@@ -61,6 +62,7 @@ public class MdocGattServer: @unchecked Sendable, ObservableObject {
 	public var deviceResponseBytes: Data?
 	/// response metadata array
 	public var responseMetadata: [Data?]!
+	public var zkpDocumentIds: [String]!
 	var readBuffer = Data()
 	var sendBuffer = [Data]()
 	var numBlocks: Int = 0
@@ -74,6 +76,7 @@ public class MdocGattServer: @unchecked Sendable, ObservableObject {
 		self.privateKeyObjects = objs.privateKeyObjects
 		self.iaca = objs.iaca
 		self.dauthMethod = objs.deviceAuthMethod
+		self.zkSystemRepository = objs.zkSystemRepository
 		status = .initialized
 		initPeripheralManager()
 		initSuccess = true
@@ -156,6 +159,7 @@ public class MdocGattServer: @unchecked Sendable, ObservableObject {
 		public func peripheralManager(_ peripheral: CBPeripheralManager, central: CBCentral, didUnsubscribeFrom characteristic: CBCharacteristic) {
 			let mdocCbc = MdocServiceCharacteristic(uuid: characteristic.uuid)
 			logger.info("Remote central \(central.identifier) disconnected for \(mdocCbc?.rawValue ?? "") characteristic")
+			server.status = .disconnected
 		}
 	}
 
@@ -270,7 +274,7 @@ public class MdocGattServer: @unchecked Sendable, ObservableObject {
 		}
 		bleDelegate = Delegate(server: self)
 		logger.info("Initializing BLE peripheral manager")
-		peripheralManager = CBPeripheralManager(delegate: bleDelegate, queue: nil)
+		peripheralManager = CBPeripheralManager(delegate: bleDelegate, queue: nil, options: [CBPeripheralManagerOptionShowPowerAlertKey: true])
 		subscribeCount = 0
 	}
 
@@ -330,11 +334,11 @@ public class MdocGattServer: @unchecked Sendable, ObservableObject {
 		if let items {
 			do {
 				let docTypeReq = deviceRequest?.docRequests.first?.itemsRequest.docType ?? ""
-				guard let (drToSend, _, _, resMetadata) = try await MdocHelpers.getDeviceResponseToSend(deviceRequest: deviceRequest!, issuerSigned: docs, docMetadata: docMetadata.compactMapValues { $0 }, selectedItems: items, sessionEncryption: sessionEncryption, eReaderKey: sessionEncryption!.sessionKeys.publicKey, privateKeyObjects: privateKeyObjects, dauthMethod: dauthMethod, unlockData: unlockData) else {
+				guard let (drToSend, _, _, resMetadata, resZkpDocIds) = try await MdocHelpers.getDeviceResponseToSend(deviceRequest: deviceRequest!, issuerSigned: docs, docMetadata: docMetadata.compactMapValues { $0 }, selectedItems: items, sessionEncryption: sessionEncryption, eReaderKey: sessionEncryption!.sessionKeys.publicKey, privateKeyObjects: privateKeyObjects, dauthMethod: dauthMethod, unlockData: unlockData, zkSystemRepository: zkSystemRepository) else {
 					errorToSend = MdocHelpers.getErrorNoDocuments(docTypeReq)
 					return
 				}
-				guard let dts = drToSend.documents, !dts.isEmpty else {
+				guard !drToSend.documents.isNilOrEmpty || !drToSend.zkDocuments.isNilOrEmpty else {
 					errorToSend = MdocHelpers.getErrorNoDocuments(docTypeReq)
 					return
 				}
@@ -344,6 +348,7 @@ public class MdocGattServer: @unchecked Sendable, ObservableObject {
 					bytesToSend = bytes
 					deviceResponseBytes = bytes.1
 					responseMetadata = resMetadata
+					zkpDocumentIds = resZkpDocIds
 				case .failure(let err):
 					errorToSend = err
 					return
