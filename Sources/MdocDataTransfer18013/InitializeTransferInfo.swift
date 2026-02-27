@@ -1,7 +1,6 @@
 import Foundation
 import MdocDataModel18013
 import MdocSecurity18013
-import struct WalletStorage.Document
 
 public struct InitializeTransferData: Sendable {
 
@@ -19,17 +18,17 @@ public struct InitializeTransferData: Sendable {
         self.zkSystemRepository = zkSystemRepository
     }
     /// doc-id to data format
-    public let dataFormats: [Document.ID: String]
+    public let dataFormats: [String: String]
     /// doc-id to document data
-    public let documentData: [Document.ID: Data]
+    public let documentData: [String: Data]
 	/// doc-id to document key indexes
-	public let documentKeyIndexes: [Document.ID: Int]
+	public let documentKeyIndexes: [String: Int]
 	/// document-id to doc-metadata map
-	public let docMetadata: [Document.ID: Data?]
+	public let docMetadata: [String: Data?]
 	/// document-id to doc.fields display names
-	public let docDisplayNames: [Document.ID: [String: [String: String]]?]
+	public let docDisplayNames: [String: [String: [String: String]]?]
     /// doc-id to private key info
-    public let docKeyInfos: [Document.ID: Data?]
+    public let docKeyInfos: [String: Data?]
     /// trusted certificates
     public let trustedCertificates: [Data]
     /// device auth method
@@ -59,23 +58,23 @@ public struct InitializeTransferData: Sendable {
 
 public struct InitializeTransferInfo {
     /// doc-id to data format
-    public let dataFormats: [Document.ID: DocDataFormat]
+    public let dataFormats: [String: DocDataFormat]
     /// doc-id to document objects
-    public let documentObjects: [Document.ID: Data]
+    public let documentObjects: [String: Data]
 	/// document-id to doc-metadata map
-	public let docMetadata: [Document.ID: Data]
+	public let docMetadata: [String: Data]
 	/// doc-id to doc.fields display names
-	public let docDisplayNames: [Document.ID: [String: [String: String]]?]
+	public let docDisplayNames: [String: [String: [String: String]]?]
     /// doc-id to private key objects
-    public let privateKeyObjects: [Document.ID: CoseKeyPrivate]
+    public let privateKeyObjects: [String: CoseKeyPrivate]
     /// trusted certificates
     public let iaca: [SecCertificate]
     /// device auth method
     public let deviceAuthMethod: DeviceAuthMethod
 	// document-id to document type map
-    public let idsToDocTypes: [Document.ID: DocType]
+    public let idsToDocTypes: [String: DocType]
 	// document-id to hashing algorithm
-	public let hashingAlgs:[Document.ID: String]
+	public let hashingAlgs:[String: String]
     // optional zk system repository
     public let zkSystemRepository: ZkSystemRepository?
 }

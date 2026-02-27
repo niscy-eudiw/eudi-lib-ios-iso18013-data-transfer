@@ -24,7 +24,6 @@ import UIKit
 import Logging
 import MdocDataModel18013
 import MdocSecurity18013
-import struct WalletStorage.Document
 
 /// BLE Gatt server implementation of mdoc transfer manager
 public class MdocGattServer: @unchecked Sendable, ObservableObject {
@@ -36,10 +35,10 @@ public class MdocGattServer: @unchecked Sendable, ObservableObject {
 	public var deviceEngagement: DeviceEngagement?
 	public var deviceRequest: DeviceRequest?
 	public var sessionEncryption: SessionEncryption?
-	public var docs: [Document.ID: IssuerSigned]!
-	public var docMetadata: [Document.ID: Data?]!
+	public var docs: [String: IssuerSigned]!
+	public var docMetadata: [String: Data?]!
 	public var iaca: [SecCertificate]!
-	public var privateKeyObjects: [Document.ID: CoseKeyPrivate]!
+	public var privateKeyObjects: [String: CoseKeyPrivate]!
 	public var dauthMethod: DeviceAuthMethod
 	public var zkSystemRepository: ZkSystemRepository?
 	public var readerName: String?
