@@ -1,13 +1,13 @@
 {
-  "originHash" : "98d7fb5f82d059be844c053ea27d84d9572f0657a771bc58dcd4834286ad0090",
+  "originHash" : "275686af225ce25cd097a714042a96c492291a5ddc4a7b5593b923b730347827",
   "pins" : [
     {
       "identity" : "eudi-lib-ios-iso18013-data-model",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/eu-digital-identity-wallet/eudi-lib-ios-iso18013-data-model.git",
       "state" : {
-        "revision" : "a3e8f8991aaf5e51690cf30a3728c534174329c6",
-        "version" : "0.9.2"
+        "revision" : "876fcb791e894d8ac8320dc171fcd967874e0346",
+        "version" : "0.10.0"
       }
     },
     {
@@ -15,8 +15,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/eu-digital-identity-wallet/eudi-lib-ios-iso18013-security.git",
       "state" : {
-        "revision" : "865049862c8154e6f350f722e185db9ae65c6301",
-        "version" : "0.8.2"
+        "revision" : "84fd10054623fff981d74ff9b2a2a5ce7ae02ec3",
+        "version" : "0.10.0"
       }
     },
     {
@@ -71,6 +71,15 @@
       "state" : {
         "revision" : "a663e7a6bd50d2224223ed60622b531b18499dd0",
         "version" : "0.6.4"
+      }
+    },
+    {
+      "identity" : "swiftyjson",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/SwiftyJSON/SwiftyJSON.git",
+      "state" : {
+        "revision" : "af76cf3ef710b6ca5f8c05f3a31307d44a3c5828",
+        "version" : "5.0.2"
       }
     }
   ],
