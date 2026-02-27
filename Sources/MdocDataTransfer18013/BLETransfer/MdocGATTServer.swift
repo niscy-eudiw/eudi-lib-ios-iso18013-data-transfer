@@ -160,6 +160,7 @@ public class MdocGattServer: @unchecked Sendable, ObservableObject {
 		public func peripheralManager(_ peripheral: CBPeripheralManager, central: CBCentral, didUnsubscribeFrom characteristic: CBCharacteristic) {
 			let mdocCbc = MdocServiceCharacteristic(uuid: characteristic.uuid)
 			logger.info("Remote central \(central.identifier) disconnected for \(mdocCbc?.rawValue ?? "") characteristic")
+			server.status = .disconnected
 		}
 	}
 
@@ -274,7 +275,7 @@ public class MdocGattServer: @unchecked Sendable, ObservableObject {
 		}
 		bleDelegate = Delegate(server: self)
 		logger.info("Initializing BLE peripheral manager")
-		peripheralManager = CBPeripheralManager(delegate: bleDelegate, queue: nil)
+		peripheralManager = CBPeripheralManager(delegate: bleDelegate, queue: nil, options: [CBPeripheralManagerOptionShowPowerAlertKey: true])
 		subscribeCount = 0
 	}
 
