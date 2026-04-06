@@ -393,19 +393,17 @@ public class MdocHelpers {
 		vc.present(alertController, animated: true)
 	}
 
-	/// Finds the top view controller in the view hierarchy of the app. It is used to present a new view controller on top of any existing view controllers.
-	@MainActor
-	public static func getTopViewController(base: UIViewController? = UIApplication.shared.windows.first { $0.isKeyWindow }?.rootViewController) -> UIViewController? {
-		if let nav = base as? UINavigationController {
-			return getTopViewController(base: nav.visibleViewController)
-		} else if let tab = base as? UITabBarController, let selected = tab.selectedViewController {
-			return getTopViewController(base: selected)
-		} else if let presented = base?.presentedViewController {
-			return getTopViewController(base: presented)
-		}
-		return base
+	public static func getPrivateKeys(_ docKeyInfos: [String: Data?], _ documentKeyIndexes: [String: Int]) async throws -> [String: CoseKeyPrivate] {
+		let privateKeyObjects: [String: CoseKeyPrivate] = try await Dictionary(uniqueKeysWithValues: docKeyInfos.asyncCompactMap {
+			guard let dki = DocKeyInfo(from: $0.value), let keyIndex = documentKeyIndexes[$0.key] else { return nil }
+			let secureArea = SecureAreaRegistry.shared.get(name: dki.secureAreaName)
+			let (_, curve) = try await secureArea.getInfoAndCurve(id: $0.key)
+			let coseKeyPrivate = try await CoseKeyPrivate(privateKeyId: $0.key, index: keyIndex, secureArea: secureArea, curve: curve)
+			return ($0.key, coseKeyPrivate)
+		})
+		return privateKeyObjects
 	}
-
+	
 	#endif
 
 	/// Get the common name (CN) from the certificate distringuished name (DN)

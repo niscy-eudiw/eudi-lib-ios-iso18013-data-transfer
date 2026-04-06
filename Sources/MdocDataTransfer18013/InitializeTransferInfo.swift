@@ -40,13 +40,9 @@ public struct InitializeTransferData: Sendable {
     // optional zk system repository
     public let zkSystemRepository: ZkSystemRepository?
 
-    public func toInitializeTransferInfo() -> InitializeTransferInfo {
+	public func toInitializeTransferInfo() async throws -> InitializeTransferInfo {
         // filter data and private keys by format
-		let privateKeyObjects: [String: CoseKeyPrivate] = Dictionary(uniqueKeysWithValues: docKeyInfos.compactMap {
-			guard let dki = DocKeyInfo(from: $0.value)  else { return nil }
-			guard let keyIndex = documentKeyIndexes[$0.key] else { return nil }
-			return ($0.key, CoseKeyPrivate(privateKeyId: $0.key, index: keyIndex, secureArea: SecureAreaRegistry.shared.get(name: dki.secureAreaName)))
-		})
+		let privateKeyObjects: [String: CoseKeyPrivate] = try await MdocHelpers.getPrivateKeys(docKeyInfos, documentKeyIndexes)
 		let documentObjects = documentData
 		let docMetadata = docMetadata.compactMapValues { $0 }
 		let dataFormats = Dictionary(uniqueKeysWithValues: dataFormats.map { k,v in (k, DocDataFormat(rawValue: v)) }).compactMapValues { $0 }
