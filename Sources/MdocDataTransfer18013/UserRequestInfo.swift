@@ -17,36 +17,18 @@ import Foundation
 import MdocDataModel18013
 
 public struct UserRequestInfo : Sendable {
-	public init(docDataFormats: [String: DocDataFormat], itemsRequested: RequestItems, deviceRequestBytes: Data? = nil, readerAuthBytes: Data? = nil, certificateChain: [Data]? = nil, readerAuthValidated: Bool? = nil, readerCertificateIssuer: String? = nil, readerCertificateValidationMessage: String? = nil, readerLegalName: String? = nil) {
+	public init(docDataFormats: [String: DocDataFormat], itemsRequested: RequestItems, deviceRequestBytes: Data? = nil) {
 		self.docDataFormats = docDataFormats
 		self.itemsRequested = itemsRequested
-		self.readerAuthValidated = readerAuthValidated
-		self.readerCertificateIssuer = readerCertificateIssuer
-		self.readerCertificateValidationMessage = readerCertificateValidationMessage
-		self.readerLegalName = readerLegalName
 		self.deviceRequestBytes = deviceRequestBytes
-        self.readerAuthBytes = readerAuthBytes
-		self.certificateChain = certificateChain
 	}
+	/// device request bytes (encoded cbor)
+	public var deviceRequestBytes: Data?
 	/// docType to format map
 	public var docDataFormats: [String: DocDataFormat]
 	/// items requested
 	public var itemsRequested: RequestItems
-	/// reader authentication from verifier validated
-	/// - `true`: reader auth was present and validated successfully
-	/// - `false`: reader auth was absent, certificate was malformed, or validation failed
-	/// - `nil`: no doc requests were present in the device request
-	public var readerAuthValidated: Bool?
-	/// reader certificate issuer (issuer common name)
-	public var readerCertificateIssuer: String?
-	/// reader certificate validation message
-	public var readerCertificateValidationMessage: String?
-	/// reader legal name
-	public var readerLegalName: String?
-	/// device request bytes (encoded cbor)
-	public var deviceRequestBytes: Data?
-	/// reader authentication bytes (encoded cbor)
-	public var readerAuthBytes: Data?
- 	/// certificate chain (base64 pem encoded)
-	public var certificateChain: [Data]?
+
+	public var readerValidations: [String: ReaderValidation] = [:]
+
 }
