@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2023 European Commission
+Copyright (c) 2026 European Commission
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -307,13 +307,10 @@ public class MdocHelpers {
 			}
 			let dr = documents.count == 1 ? deviceResponse : getSingleDocumentDeviceResponse(document: document)
 			let docBytes = dr.toCBOR(options: CBOROptions()).encode()
-			// Generate ZkDocument
-			if let zkDocument = try? zkSystem.generateProof(zkSystemSpec: zkSpec, docBytes: docBytes, x: nil, y: nil, sessionTranscriptBytes: sessionTranscript.encode(options: CBOROptions()), timestamp: Date()) {
-				zkDocuments.append(zkDocument)
-				zkpDocumentIds.append(docIdsFiltered[index])
-			} else {
-				documents2.append(document)
-			}
+			// Generate ZkDocument — fail closed if proof generation fails when ZKP is matched
+			let zkDocument = try zkSystem.generateProof(zkSystemSpec: zkSpec, docBytes: docBytes, x: nil, y: nil, sessionTranscriptBytes: sessionTranscript.encode(options: CBOROptions()), timestamp: Date())
+			zkDocuments.append(zkDocument)
+			zkpDocumentIds.append(docIdsFiltered[index])
 		}
 		guard !zkDocuments.isEmpty else { return (deviceResponse, zkpDocumentIds) }
 		return (DeviceResponse(documents: documents2, zkDocuments: zkDocuments, documentErrors: deviceResponse.documentErrors, status: deviceResponse.status), zkpDocumentIds)
@@ -392,6 +389,8 @@ public class MdocHelpers {
 		})
 		vc.present(alertController, animated: true)
 	}
+	
+	#endif
 
 	public static func getPrivateKeys(_ docKeyInfos: [String: Data?], _ documentKeyIndexes: [String: Int]) async throws -> [String: CoseKeyPrivate] {
 		let privateKeyObjects: [String: CoseKeyPrivate] = try await Dictionary(uniqueKeysWithValues: docKeyInfos.asyncCompactMap {
@@ -403,8 +402,6 @@ public class MdocHelpers {
 		})
 		return privateKeyObjects
 	}
-	
-	#endif
 
 	/// Get the common name (CN) from the certificate distringuished name (DN)
 	public static func getCN(from dn: String) -> String  {

@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2023 European Commission
+Copyright (c) 2026 European Commission
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -182,7 +182,7 @@ public class MdocGattServer: @unchecked Sendable, ObservableObject {
 			error = MdocHelpers.makeError(code: .unexpected_error, str: error?.localizedDescription ?? "Not initialized!")
 			return
 		}
-		deviceEngagement = DeviceEngagement(isBleServer: true, rfus: rfus)
+		deviceEngagement = DeviceEngagement(supportsCentralClientMode: false, supportsPeripheralServerMode: true, rfus: rfus)
 		try await deviceEngagement!.makePrivateKey(crv: crv, secureArea: secureArea)
 		sessionEncryption = nil
 #if os(iOS)
