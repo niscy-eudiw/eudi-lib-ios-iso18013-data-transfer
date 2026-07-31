@@ -158,7 +158,8 @@ public class MdocHelpers {
 			var userRequestInfo = UserRequestInfo(
 				docDataFormats: requestedDocDataFormats,
 				itemsRequested: validRequestItems,
-				deviceRequestBytes: Data(requestData)
+				deviceRequestBytes: Data(requestData),
+				requestName: "BLE"
 			)
 			for docR in deviceRequest.docRequests {
 				let mdocAuth = MdocReaderAuthentication(transcript: sessionEncryption.sessionTranscript)
