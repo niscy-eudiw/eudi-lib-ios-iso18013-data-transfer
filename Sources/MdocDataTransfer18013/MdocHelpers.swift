@@ -107,7 +107,8 @@ public class MdocHelpers {
 		dauthMethod: DeviceAuthMethod,
 		unlockData: [String: Data],
 		readerKeyRawData: [UInt8]?,
-		handOver: CBOR
+		handOver: CBOR,
+		authenticationContext: ThreadSafeAuthContext
 	) async -> Result<(
 		sessionEncryption: SessionEncryption,
 		deviceRequest: DeviceRequest,
@@ -131,7 +132,7 @@ public class MdocHelpers {
 				return .failure(Self.makeError(code: .deviceEngagementMissing))
 			}
 			// init session-encryption object from session establish message and device engagement, decrypt data
-			let sessionEncryption = SessionEncryption(se: se, de: deviceEngagement, handOver: handOver)
+			let sessionEncryption = SessionEncryption(se: se, de: deviceEngagement, handOver: handOver, authenticationContext: authenticationContext)
 			guard var sessionEncryption else {
 				logger.error("Session Encryption not initialized")
 				return .failure(Self.makeError(code: .sessionEncryptionNotInitialized))
@@ -147,7 +148,8 @@ public class MdocHelpers {
 				eReaderKey: sessionEncryption.sessionKeys.publicKey,
 				privateKeyObjects: privateKeyObjects,
 				dauthMethod: dauthMethod,
-				unlockData: unlockData
+				unlockData: unlockData,
+				authenticationContext: authenticationContext
 			)
 			guard let (previewDeviceResponse, validRequestItems, _, _, _, _) = requestResponse else {
 				logger.error("Valid request items nil")
@@ -245,7 +247,8 @@ public class MdocHelpers {
 		unlockData: [String: Data],
 		zkSpecsRequested: [DocType: [ZkSystemSpec]]? = nil,
 		zkSystemRepository: ZkSystemRepository? = nil,
-		deviceNameSpacesRequested: RequestDeviceNameSpaces? = nil
+		deviceNameSpacesRequested: RequestDeviceNameSpaces? = nil,
+		authenticationContext: ThreadSafeAuthContext
 	) async throws -> (
 		deviceResponse: DeviceResponse,
 		validRequestItems: RequestItems,
@@ -386,7 +389,7 @@ public class MdocHelpers {
 				if let sessionTranscript, let privateKeyObject {
 					let deviceNameSpacesToAdd = deviceNameSpacesRequested?[reqDocIdOrDocType]
 					if let deviceNameSpacesToAdd {
-						let keyAuthorizations = issuerAuthToAdd.mso.deviceKeyInfo.keyAuthorizations					
+						let keyAuthorizations = issuerAuthToAdd.mso.deviceKeyInfo.keyAuthorizations
 						for (_, element) in deviceNameSpacesToAdd.deviceNameSpaces.enumerated() {
 							let namespace = element.key
 							let deviceSignedItems = element.value
@@ -418,6 +421,7 @@ public class MdocHelpers {
 						dauthMethod: dauthMethod,
 						deviceNameSpaces: deviceNameSpacesToAdd,
 						unlockData: unlockPayload,
+						authenticationContext: authenticationContext,
 					) else {
 						logger.error("Cannot create device auth"); return nil
 					}
@@ -463,7 +467,7 @@ public class MdocHelpers {
 		return (deviceResponseToSend, validReqItemsDocDict, errorReqItemsDocDict, resMetadata, documentIds, zkpDocumentIds)
 	}
 
-	/// Prepares data blocks to be sent over BLE.	
+	/// Prepares data blocks to be sent over BLE.
 	static func prepareDataBlocksToSend(_ msg: Data, blockSize: Int) -> [Data] {
 		var sendBuffer = [Data]()
 		var numBlocks: Int = 0
