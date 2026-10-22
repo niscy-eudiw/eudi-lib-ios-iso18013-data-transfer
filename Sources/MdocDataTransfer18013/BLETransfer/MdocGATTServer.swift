@@ -52,6 +52,7 @@ public class MdocGattServer: @unchecked Sendable, MdocBleTransport {
 		}
 	}
 		var sendBuffer = [Data]()
+    var inactivityTimer: SessionInactivityTimeout?
 	var peerState = GattPeerState()
 	var initSuccess:Bool = false
     var advertisingGeneration = UUID()
@@ -97,6 +98,7 @@ public class MdocGattServer: @unchecked Sendable, MdocBleTransport {
 
         func peripheralManager(_ peripheral: CBPeripheralManager, didReceiveWrite requests: [CBATTRequest]) {
             guard let first = requests.first else { return }
+            guard server.inactivityTimer?.check() != false else { return }
             guard [.connected, .started, .requestReceived, .userSelected, .responseSent].contains(server.status),
                   server.peerState.accepts(first.central.identifier) else {
                 peripheral.respond(to: first, withResult: .insufficientAuthorization)
@@ -123,6 +125,7 @@ public class MdocGattServer: @unchecked Sendable, MdocBleTransport {
                 switch event {
                 case .started: server.status = .started
                 case .request(let data):
+                    server.inactivityTimer?.activity()
                     server.status = .requestReceived
                     server.delegate?.didReceiveRequest(data)
                 case .ended:
@@ -141,7 +144,7 @@ public class MdocGattServer: @unchecked Sendable, MdocBleTransport {
 			central: CBCentral,
 			didSubscribeTo characteristic: CBCharacteristic
 		) {
-			guard server.status == .qrEngagementReady else {
+			guard server.inactivityTimer?.check() != false, server.status == .qrEngagementReady else {
 				return
 			}
             let channel: GattPeerState.Channel
@@ -204,10 +207,13 @@ public class MdocGattServer: @unchecked Sendable, MdocBleTransport {
 	}
 
 	public func startBleAdvertising() {
+        guard Thread.isMainThread else { DispatchQueue.main.sync { self.startBleAdvertising() }; return }
 		guard !isInErrorState else {
 			logger.info("Current status is \(status)")
 			return
 		}
+        monitorInactivity()
+        guard inactivityTimer?.check() != false else { return }
 		if peripheralManager.state == .poweredOn {
 			logger.info("Peripheral manager powered on")
 			error = nil
@@ -243,6 +249,7 @@ public class MdocGattServer: @unchecked Sendable, MdocBleTransport {
 	public var isAuthorized: Bool { peripheralManager.state != .unauthorized }
 
 	public func stopBleAdvertising() {
+        guard Thread.isMainThread else { DispatchQueue.main.sync { self.stopBleAdvertising() }; return }
         advertisingGeneration = UUID()
 		if let peripheralManager, peripheralManager.isAdvertising {
 			peripheralManager.stopAdvertising()
@@ -250,11 +257,42 @@ public class MdocGattServer: @unchecked Sendable, MdocBleTransport {
 		advertising = false
 	}
 
+    func monitorInactivity(using suppliedTimer: SessionInactivityTimeout? = nil) {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.sync { self.monitorInactivity(using: suppliedTimer) }
+            return
+        }
+        guard let key = delegate?.deviceEngagement?.privateKey else { return }
+        let timer = suppliedTimer ?? SessionInactivityTimeout.shared(for: key)
+        guard inactivityTimer !== timer else { return }
+        inactivityTimer?.cancel()
+        inactivityTimer = timer
+        timer.observe(self) { [weak self, weak timer] notify in
+            guard let self, let timer, self.inactivityTimer === timer else { return false }
+            let currentKey = self.delegate?.deviceEngagement?.privateKey
+            let ownsSession = currentKey?.privateKeyId == key.privateKeyId && currentKey?.index == key.index &&
+                currentKey.map { ObjectIdentifier($0.secureArea) == ObjectIdentifier(key.secureArea) } == true
+            self.terminateSession(clearDelegate: ownsSession)
+            if notify && ownsSession {
+                self.error = MdocHelpers.makeError(code: .bleSessionTimeout)
+                return true
+            }
+            return false
+        }
+    }
+
     @discardableResult
-    func terminateSession() -> Task<Void, Never>? {
+    func terminateSession(clearDelegate: Bool = true, preserveServices: Bool = false) -> Task<Void, Never>? {
+        guard Thread.isMainThread else {
+            return DispatchQueue.main.sync { self.terminateSession(clearDelegate: clearDelegate, preserveServices: preserveServices) }
+        }
+        let timer = inactivityTimer
+        inactivityTimer = nil
+        timer?.end()
         stopBleAdvertising()
+        if !preserveServices { removeServices() }
         clearPeer()
-        return clearMdocSession(delegate)
+        return clearDelegate ? clearMdocSession(delegate) : nil
     }
 
     public func stop() {
@@ -298,12 +336,15 @@ public class MdocGattServer: @unchecked Sendable, MdocBleTransport {
     }
 
     public func sendData(_ data: Data) {
+        guard Thread.isMainThread else { DispatchQueue.main.sync { self.sendData(data) }; return }
+        guard inactivityTimer?.check() != false else { return }
         guard let central = remoteCentral, peerState.accepts(central.identifier),
               status == .requestReceived || status == .userSelected,
               central.maximumUpdateValueLength > 1 else {
             error = MdocHelpers.makeError(code: .unexpected_error, str: "No subscribed GATT peer for response")
             return
         }
+        inactivityTimer?.activity()
         let maxPayloadBlockSize = min(511, central.maximumUpdateValueLength - 1)
         sendBuffer = MdocHelpers.prepareDataBlocksToSend(data, blockSize: maxPayloadBlockSize)
         let generation = peerState.generation
@@ -314,14 +355,22 @@ public class MdocGattServer: @unchecked Sendable, MdocBleTransport {
     }
 
     func sendDataWithUpdates() {
+        guard inactivityTimer?.check() != false else { return }
         guard let central = remoteCentral, peerState.accepts(central.identifier),
               let peripheralManager, let server2ClientCharacteristic else { return }
         while let block = sendBuffer.first {
             guard peripheralManager.updateValue(block, for: server2ClientCharacteristic,
                                                 onSubscribedCentrals: [central]) else { return }
             sendBuffer.removeFirst()
+            inactivityTimer?.activity()
         }
         finishResponse()
+    }
+
+    func removeServices() {
+        peripheralManager?.removeAllServices()
+        stateCharacteristic = nil
+        server2ClientCharacteristic = nil
     }
 
     func didUnsubscribe(_ centralID: UUID) {
@@ -331,13 +380,14 @@ public class MdocGattServer: @unchecked Sendable, MdocBleTransport {
             completedCentralID = nil
             // A completed peer has no claim on a replacement engagement being prepared.
             guard delegate?.deviceEngagement == nil else { return }
+            removeServices()
         } else { return }
         status = .disconnected
     }
 
     func finishResponse() {
         let centralID = peerState.centralID
-        terminateSession()
+        terminateSession(preserveServices: true)
         completedCentralID = centralID
         status = .responseSent
         logger.info("Finished sending BLE data")

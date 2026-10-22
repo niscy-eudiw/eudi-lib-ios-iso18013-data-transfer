@@ -29,6 +29,7 @@ public class MdocGattCentral: NSObject, MdocBleTransport, @unchecked Sendable {
 	var maximumCharacteristicSize: Int?
 	var readBuffer = Data()
 	var sendBuffer = [Data]()
+    var inactivityTimer: SessionInactivityTimeout?
 	public var error: Error? = nil {
 		didSet {
 			if let error {
@@ -59,6 +60,7 @@ public class MdocGattCentral: NSObject, MdocBleTransport, @unchecked Sendable {
 	}
 
     public func startBleAdvertising() {
+        guard Thread.isMainThread else { DispatchQueue.main.sync { self.startBleAdvertising() }; return }
         if centralManager?.state == .poweredOn { handleCentralPoweredOn() }
     }
 
@@ -73,6 +75,7 @@ public class MdocGattCentral: NSObject, MdocBleTransport, @unchecked Sendable {
 	public var supportsL2cap: Bool { false }
 	
 	private func handleCentralPoweredOn() {
+        guard Thread.isMainThread else { DispatchQueue.main.sync { self.handleCentralPoweredOn() }; return }
 		delegate?.didPoweredOn(isPeripheralManager: false)
 		status = .poweredOn
 		guard let serviceUuid = delegate?.deviceEngagement?.ble_uuid else {
@@ -80,6 +83,8 @@ public class MdocGattCentral: NSObject, MdocBleTransport, @unchecked Sendable {
 			error = MdocHelpers.makeError(code: .deviceEngagementMissing)
 			return
 		}
+        monitorInactivity()
+        guard inactivityTimer?.check() != false else { return }
 		centralManager.scanForPeripherals(withServices: [CBUUID(string: serviceUuid)])
 		logger.info("Started scanning for peripherals with service UUID \(serviceUuid)")
 		status = .qrEngagementReady
@@ -105,8 +110,38 @@ public class MdocGattCentral: NSObject, MdocBleTransport, @unchecked Sendable {
 
     private func disconnect() { terminateSession() }
 
+    func monitorInactivity(using suppliedTimer: SessionInactivityTimeout? = nil) {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.sync { self.monitorInactivity(using: suppliedTimer) }
+            return
+        }
+        guard let key = delegate?.deviceEngagement?.privateKey else { return }
+        let timer = suppliedTimer ?? SessionInactivityTimeout.shared(for: key)
+        guard inactivityTimer !== timer else { return }
+        inactivityTimer?.cancel()
+        inactivityTimer = timer
+        timer.observe(self) { [weak self, weak timer] notify in
+            guard let self, let timer, self.inactivityTimer === timer else { return false }
+            let currentKey = self.delegate?.deviceEngagement?.privateKey
+            let ownsSession = currentKey?.privateKeyId == key.privateKeyId && currentKey?.index == key.index &&
+                currentKey.map { ObjectIdentifier($0.secureArea) == ObjectIdentifier(key.secureArea) } == true
+            self.terminateSession(clearDelegate: ownsSession)
+            if notify && ownsSession {
+                self.error = MdocHelpers.makeError(code: .bleSessionTimeout)
+                return true
+            }
+            return false
+        }
+    }
+
     @discardableResult
-    func terminateSession() -> Task<Void, Never>? {
+    func terminateSession(clearDelegate: Bool = true) -> Task<Void, Never>? {
+        guard Thread.isMainThread else {
+            return DispatchQueue.main.sync { self.terminateSession(clearDelegate: clearDelegate) }
+        }
+        let timer = inactivityTimer
+        inactivityTimer = nil
+        timer?.end()
         centralManager?.stopScan()
         let oldPeripheral = peripheral
         peripheral = nil
@@ -120,7 +155,7 @@ public class MdocGattCentral: NSObject, MdocBleTransport, @unchecked Sendable {
         stateCharacteristic = nil
         readBuffer.removeAll()
         sendBuffer.removeAll()
-        return clearMdocSession(delegate)
+        return clearDelegate ? clearMdocSession(delegate) : nil
     }
 
     // Used by tests without starting Bluetooth.
@@ -130,10 +165,13 @@ public class MdocGattCentral: NSObject, MdocBleTransport, @unchecked Sendable {
     }
 
 	public func sendData(_ data: Data) {
+        guard Thread.isMainThread else { DispatchQueue.main.sync { self.sendData(data) }; return }
+        guard inactivityTimer?.check() != false else { return }
 		guard status == .requestReceived else {
 			logger.info("Unexpected write in status \(status)")
 			return
 		}
+        inactivityTimer?.activity()
 		status = .userSelected
 		let blockSize = max((maximumCharacteristicSize ?? 1) - 1, 1)
 		sendBuffer = MdocHelpers.prepareDataBlocksToSend(data, blockSize: blockSize)
@@ -141,6 +179,7 @@ public class MdocGattCentral: NSObject, MdocBleTransport, @unchecked Sendable {
 	}
 
 	private func writeNextBlock() {
+        guard inactivityTimer?.check() != false else { return }
 		guard !sendBuffer.isEmpty else {
             finishResponse()
 			return
@@ -149,7 +188,9 @@ public class MdocGattCentral: NSObject, MdocBleTransport, @unchecked Sendable {
 			error = MdocHelpers.makeError(code: .bleNotSupported)
 			return
 		}
-		peripheral?.writeValue(sendBuffer.first!, for: writeCharacteristic, type: .withoutResponse)
+        guard let peripheral else { return }
+		peripheral.writeValue(sendBuffer.first!, for: writeCharacteristic, type: .withoutResponse)
+        inactivityTimer?.activity()
 		if !sendBuffer.isEmpty { sendBuffer.removeFirst() }
 	}
 
@@ -221,6 +262,7 @@ public class MdocGattCentral: NSObject, MdocBleTransport, @unchecked Sendable {
 		peripheral: CBPeripheral,
 		characteristic: CBCharacteristic
 	) throws {
+        guard inactivityTimer?.check() != false else { return }
 		if var data = characteristic.value {
 			let characteristicDescription =
 				MdocServiceCharacteristic(uuid: characteristic.uuid)?.description
@@ -241,12 +283,14 @@ public class MdocGattCentral: NSObject, MdocBleTransport, @unchecked Sendable {
 					error = MdocHelpers.makeError(code: .bleInvalidStateByte)
 				}
 			case MdocServiceCharacteristic.server2Client.uuid:
+                guard status == .started else { return }
 				let firstByte = data.popFirst()
 				readBuffer.append(data)
 				switch firstByte {
 				case .none:
 					error = MdocHelpers.makeError(code: .bleNoData)
 				case BleTransferMode.END_DATA.first!: // 0x00:
+                    inactivityTimer?.activity()
                     let request = readBuffer
                     readBuffer.removeAll()
 					status = .requestReceived

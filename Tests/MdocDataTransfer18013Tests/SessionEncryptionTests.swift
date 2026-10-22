@@ -200,6 +200,95 @@ struct SessionEncryptionTests {
         #expect(fixture.engagement.isSessionTerminated)
     }
 
+    #if !os(watchOS)
+    @Test func advertisingPauseAndConsentRemainSubjectToTimeout() async throws {
+        let fixture = try await Fixture()
+        let delegate = CleanupDelegate(engagement: fixture.engagement, session: fixture.session)
+        let clock = TimeoutTestClock()
+        let server = MdocGattServer(peripheralManager: nil)
+        server.delegate = delegate
+        server.monitorInactivity(using: clock.makeTimer())
+        server.stopBleAdvertising()
+        clock.advance(300)
+        clock.deliver()
+        #expect(fixture.engagement.isSessionTerminated)
+        #expect(delegate.sessionEncryption == nil)
+        #expect(delegate.errors.count == 1)
+        #expect((delegate.errors.first as NSError?)?.code == ErrorCode.bleSessionTimeout.rawValue)
+    }
+
+    @Test func bothRolesShareDeadlineAndNotifyTimeoutOnlyOnce() async throws {
+        let fixture = try await Fixture()
+        let delegate = CleanupDelegate(engagement: fixture.engagement, session: fixture.session)
+        let key = try #require(fixture.engagement.privateKey)
+        #expect(SessionInactivityTimeout.shared(for: key) === SessionInactivityTimeout.shared(for: key))
+        let clock = TimeoutTestClock()
+        let timer = clock.makeTimer()
+        let server = MdocGattServer(peripheralManager: nil)
+        server.delegate = delegate
+        let central = MdocGattCentral(centralManager: nil)
+        central.delegate = delegate
+        server.monitorInactivity(using: timer)
+        central.monitorInactivity(using: timer)
+        central.readBuffer = Data([1])
+        clock.advance(299)
+        server.inactivityTimer?.activity()
+        clock.advance(1)
+        clock.deliver()
+        #expect(!fixture.engagement.isSessionTerminated)
+        #expect(delegate.errors.isEmpty)
+        clock.advance(299)
+        clock.deliver()
+        #expect(fixture.engagement.isSessionTerminated)
+        #expect(central.readBuffer.isEmpty)
+        #expect(server.inactivityTimer == nil && central.inactivityTimer == nil)
+        #expect(delegate.errors.count == 1)
+    }
+
+    @Test func stoppingOneRoleEndsItsSiblingWithoutReportingTimeout() async throws {
+        let fixture = try await Fixture()
+        let delegate = CleanupDelegate(engagement: fixture.engagement, session: fixture.session)
+        let clock = TimeoutTestClock()
+        let timer = clock.makeTimer()
+        let server = MdocGattServer(peripheralManager: nil)
+        let central = MdocGattCentral(centralManager: nil)
+        server.delegate = delegate
+        central.delegate = delegate
+        server.monitorInactivity(using: timer)
+        central.monitorInactivity(using: timer)
+        central.readBuffer = Data([9])
+        server.stop()
+        #expect(server.inactivityTimer == nil && central.inactivityTimer == nil)
+        #expect(central.readBuffer.isEmpty)
+        #expect(fixture.engagement.isSessionTerminated)
+        clock.advance(300)
+        clock.deliver()
+        #expect(delegate.errors.isEmpty)
+    }
+
+    @Test func stoppedTimerCannotInvalidateReplacementEngagement() async throws {
+        let old = try await Fixture()
+        let delegate = CleanupDelegate(engagement: old.engagement, session: old.session)
+        let clock = TimeoutTestClock()
+        let server = MdocGattServer(peripheralManager: nil)
+        server.delegate = delegate
+        server.monitorInactivity(using: clock.makeTimer())
+        server.stop()
+        let fresh = try await Fixture()
+        delegate.deviceEngagement = fresh.engagement
+        delegate.sessionEncryption = fresh.session
+        server.monitorInactivity(using: clock.makeTimer())
+        clock.advance(299)
+        clock.deliver()
+        #expect(!fresh.engagement.isSessionTerminated)
+        #expect(delegate.errors.isEmpty)
+        server.stop()
+        clock.advance(1)
+        clock.deliver()
+        #expect(delegate.errors.isEmpty)
+    }
+    #endif
+
     private struct Fixture: Sendable {
         typealias Decoded = (sessionEncryption: SessionEncryption, deviceRequest: DeviceRequest, userRequestInfo: UserRequestInfo, isValidRequest: Bool)
         let engagement: DeviceEngagement
@@ -344,7 +433,8 @@ private final class CleanupDelegate: MdocOfflineDelegate {
         sessionEncryption = session
     }
     func didChangeStatus(_ newStatus: TransferStatus) {}
-    func didFinishedWithError(_ error: Error) {}
+    var errors: [Error] = []
+    func didFinishedWithError(_ error: Error) { errors.append(error) }
     func didReceiveRequest(_ data: Data) {}
     func didPoweredOn(isPeripheralManager: Bool) {}
     func didConnected(isPeripheral: Bool, deviceName: String?) {}
