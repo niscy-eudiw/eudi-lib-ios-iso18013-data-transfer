@@ -115,16 +115,17 @@ public class MdocGattCentral: NSObject, MdocBleTransport, @unchecked Sendable {
             DispatchQueue.main.sync { self.monitorInactivity(using: suppliedTimer) }
             return
         }
-        guard let key = delegate?.deviceEngagement?.privateKey else { return }
+        guard let engagement = delegate?.deviceEngagement, let key = engagement.privateKey else { return }
         let timer = suppliedTimer ?? SessionInactivityTimeout.shared(for: key)
         guard inactivityTimer !== timer else { return }
-        inactivityTimer?.cancel()
+        inactivityTimer?.end()
         inactivityTimer = timer
         timer.observe(self) { [weak self, weak timer] notify in
             guard let self, let timer, self.inactivityTimer === timer else { return false }
             let currentKey = self.delegate?.deviceEngagement?.privateKey
             let ownsSession = currentKey?.privateKeyId == key.privateKeyId && currentKey?.index == key.index &&
                 currentKey.map { ObjectIdentifier($0.secureArea) == ObjectIdentifier(key.secureArea) } == true
+            if !ownsSession { clearMdocSession(nil, engagement: engagement) }
             self.terminateSession(clearDelegate: ownsSession)
             if notify && ownsSession {
                 self.error = MdocHelpers.makeError(code: .bleSessionTimeout)

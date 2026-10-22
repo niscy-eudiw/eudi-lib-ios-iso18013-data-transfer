@@ -34,12 +34,6 @@ public class MdocGattServer: @unchecked Sendable, MdocBleTransport {
 	var server2ClientCharacteristic: CBMutableCharacteristic!
 	public weak var delegate: (any MdocOfflineDelegate)?
 
-	private var sessionDelegate: any MdocOfflineDelegate {
-		guard let delegate else {
-			fatalError("MdocOfflineDelegate must be set before using MdocGattServer")
-		}
-		return delegate
-	}
 	public var advertising: Bool = false
 	public var error: Error? = nil {
 		didSet {
@@ -56,6 +50,8 @@ public class MdocGattServer: @unchecked Sendable, MdocBleTransport {
 	var peerState = GattPeerState()
 	var initSuccess:Bool = false
     var advertisingGeneration = UUID()
+    var advertisingState = BleAdvertisingState()
+    var advertisedEngagement: DeviceEngagement?
 
 	required public init() {
 		status = .initialized
@@ -212,25 +208,32 @@ public class MdocGattServer: @unchecked Sendable, MdocBleTransport {
 			logger.info("Current status is \(status)")
 			return
 		}
+        guard let engagement = delegate?.deviceEngagement, engagement.privateKey != nil,
+              !engagement.isSessionTerminated, let serviceUuid = engagement.ble_uuid else {
+            error = MdocHelpers.makeError(code: .deviceEngagementMissing)
+            return
+        }
         monitorInactivity()
         guard inactivityTimer?.check() != false else { return }
-		if peripheralManager.state == .poweredOn {
-			logger.info("Peripheral manager powered on")
-			error = nil
-			guard let serviceUuid = sessionDelegate.deviceEngagement?.ble_uuid else {
-				logger.error("BLE initialization error")
-				return
-			}
-			clearPeer()
-			buildServices(uuid: serviceUuid)
-			let advertisedServiceUuids = [CBUUID(string: serviceUuid)]
-			let advertisementData: [String: Any] = [
-				CBAdvertisementDataServiceUUIDsKey: advertisedServiceUuids,
-				CBAdvertisementDataLocalNameKey: serviceUuid
-			]
-			// advertise the peripheral with the short UUID
-			peripheralManager.startAdvertising(advertisementData)
-			advertising = true
+        if peripheralManager.state == .poweredOn {
+            do {
+                switch try advertisingState.admit(engagement, isAdvertising: advertising) {
+                case .alreadyActive: return
+                case .resume:
+                    advertiseService(uuid: serviceUuid)
+                    return
+                case .start: break
+                }
+            } catch {
+                self.error = MdocHelpers.makeError(code: .bleEngagementReused)
+                return
+            }
+            advertisedEngagement = engagement
+            logger.info("Peripheral manager powered on")
+            error = nil
+            clearPeer()
+            buildServices(uuid: serviceUuid)
+            advertiseService(uuid: serviceUuid)
 			status = .qrEngagementReady
 		} else {
 		// once bt is powered on, advertise
@@ -245,6 +248,14 @@ public class MdocGattServer: @unchecked Sendable, MdocBleTransport {
 		}
 		}
 	}
+
+    private func advertiseService(uuid: String) {
+        peripheralManager.startAdvertising([
+            CBAdvertisementDataServiceUUIDsKey: [CBUUID(string: uuid)],
+            CBAdvertisementDataLocalNameKey: uuid
+        ])
+        advertising = true
+    }
 
 	public var isAuthorized: Bool { peripheralManager.state != .unauthorized }
 
@@ -262,16 +273,17 @@ public class MdocGattServer: @unchecked Sendable, MdocBleTransport {
             DispatchQueue.main.sync { self.monitorInactivity(using: suppliedTimer) }
             return
         }
-        guard let key = delegate?.deviceEngagement?.privateKey else { return }
+        guard let engagement = delegate?.deviceEngagement, let key = engagement.privateKey else { return }
         let timer = suppliedTimer ?? SessionInactivityTimeout.shared(for: key)
         guard inactivityTimer !== timer else { return }
-        inactivityTimer?.cancel()
+        inactivityTimer?.end()
         inactivityTimer = timer
         timer.observe(self) { [weak self, weak timer] notify in
             guard let self, let timer, self.inactivityTimer === timer else { return false }
             let currentKey = self.delegate?.deviceEngagement?.privateKey
             let ownsSession = currentKey?.privateKeyId == key.privateKeyId && currentKey?.index == key.index &&
                 currentKey.map { ObjectIdentifier($0.secureArea) == ObjectIdentifier(key.secureArea) } == true
+            if !ownsSession { clearMdocSession(nil, engagement: engagement) }
             self.terminateSession(clearDelegate: ownsSession)
             if notify && ownsSession {
                 self.error = MdocHelpers.makeError(code: .bleSessionTimeout)
@@ -286,13 +298,18 @@ public class MdocGattServer: @unchecked Sendable, MdocBleTransport {
         guard Thread.isMainThread else {
             return DispatchQueue.main.sync { self.terminateSession(clearDelegate: clearDelegate, preserveServices: preserveServices) }
         }
+        let engagement = advertisedEngagement
+        advertisedEngagement = nil
+        advertisingState.retire()
         let timer = inactivityTimer
         inactivityTimer = nil
         timer?.end()
         stopBleAdvertising()
         if !preserveServices { removeServices() }
         clearPeer()
-        return clearDelegate ? clearMdocSession(delegate) : nil
+        if clearDelegate { return clearMdocSession(delegate, engagement: engagement) }
+        if let engagement { return clearMdocSession(nil, engagement: engagement) }
+        return nil
     }
 
     public func stop() {

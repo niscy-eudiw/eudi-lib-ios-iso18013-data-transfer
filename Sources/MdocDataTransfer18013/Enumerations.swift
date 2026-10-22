@@ -71,6 +71,7 @@ public enum ErrorCode: Int, CustomStringConvertible, Sendable {
 	case bleNoData
 	case sessionAlreadyEstablished
 	case bleSessionTimeout
+	case bleEngagementReused
 	
 	public var description: String {
 		switch self {
@@ -89,6 +90,7 @@ public enum ErrorCode: Int, CustomStringConvertible, Sendable {
 		case .bleInvalidStateLength: return "INVALID_STATE_LENGTH"
 		case .bleInvalidStateByte: return "INVALID_STATE_BYTE"
 		case .bleNoData: return "NO_DATA"
+		case .bleEngagementReused: return "BLE_ENGAGEMENT_REUSED"
 		case .bleSessionTimeout: return "BLE_SESSION_TIMEOUT"
 		case .sessionAlreadyEstablished: return "SESSION_ALREADY_ESTABLISHED"
 		default: return "GENERIC_ERROR"

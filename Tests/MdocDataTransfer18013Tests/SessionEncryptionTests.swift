@@ -15,6 +15,9 @@ limitations under the License.
 */
 
 import Foundation
+#if !os(watchOS)
+import CoreBluetooth
+#endif
 import CryptoKit
 import Testing
 import MdocDataModel18013
@@ -286,6 +289,127 @@ struct SessionEncryptionTests {
         clock.advance(1)
         clock.deliver()
         #expect(delegate.errors.isEmpty)
+    }
+    #endif
+
+    @Test func freshAdvertisingIsAdmittedOnceAndLiveStartsAreIdempotent() async throws {
+        let fixture = try await Fixture()
+        var state = BleAdvertisingState()
+        let first = try state.admit(fixture.engagement)
+        let second = try state.admit(fixture.engagement)
+        #expect(first == .start)
+        #expect(second == .alreadyActive)
+        state.retire()
+        #expect(throws: BleAdvertisingState.Failure.reusedUUID) { try state.admit(fixture.engagement) }
+        var anotherTransport = BleAdvertisingState()
+        #expect(throws: BleAdvertisingState.Failure.reusedUUID) { try anotherTransport.admit(fixture.engagement) }
+    }
+
+    @Test func liveAdvertisingPauseCanResumeWithoutRetiringTheEngagement() async throws {
+        let fixture = try await Fixture()
+        var state = BleAdvertisingState()
+        _ = try state.admit(fixture.engagement)
+        let resumed = try state.admit(fixture.engagement, isAdvertising: false)
+        #expect(resumed == .resume)
+        let duplicate = try state.admit(fixture.engagement, isAdvertising: true)
+        #expect(duplicate == .alreadyActive)
+        #expect(!fixture.engagement.isSessionTerminated)
+    }
+
+    @Test func newKeyOnOldEngagementCannotReuseAdvertisedUUID() async throws {
+        let fixture = try await Fixture()
+        var state = BleAdvertisingState()
+        _ = try state.admit(fixture.engagement)
+        state.retire()
+        var reused = fixture.engagement
+        reused.invalidateSession()
+        try await reused.makePrivateKey(secureArea: SoftwareSecureArea.create(storage: SessionTestKeyStorage()), keyOptions: .init(curve: .P256))
+        #expect(!reused.isSessionTerminated)
+        #expect(reused.ble_uuid == fixture.engagement.ble_uuid)
+        #expect(throws: BleAdvertisingState.Failure.reusedUUID) { try state.admit(reused) }
+        let fresh = try await Fixture()
+        let admitted = try state.admit(fresh.engagement)
+        #expect(admitted == .start)
+    }
+
+    #if !os(watchOS)
+    @Test func stoppedEngagementCannotBeAdvertisedAgain() async throws {
+        let fixture = try await Fixture()
+        let delegate = CleanupDelegate(engagement: fixture.engagement, session: fixture.session)
+        let server = MdocGattServer(peripheralManager: nil)
+        server.delegate = delegate
+        _ = try server.advertisingState.admit(fixture.engagement)
+        server.advertisedEngagement = fixture.engagement
+        server.stop()
+        delegate.deviceEngagement = fixture.engagement
+        server.startBleAdvertising() // Must reject before touching the absent manager.
+        #expect(server.error != nil)
+        #expect(!server.advertising)
+        #expect(delegate.deviceEngagement == nil)
+    }
+
+    @Test func missingKeyCannotBeAdvertised() throws {
+        let engagement = try #require(DeviceEngagement(supportsCentralClientMode: false, supportsPeripheralServerMode: true))
+        let delegate = CleanupDelegate(engagement: engagement, session: nil)
+        let server = MdocGattServer(peripheralManager: nil)
+        server.delegate = delegate
+        server.startBleAdvertising()
+        #expect(server.error != nil)
+        #expect(!server.advertising)
+    }
+
+    @Test func responseKeepsNotificationServicesUntilUnsubscribe() async throws {
+        let fixture = try await Fixture()
+        let delegate = CleanupDelegate(engagement: fixture.engagement, session: fixture.session)
+        let server = MdocGattServer(peripheralManager: nil)
+        server.delegate = delegate
+        let peer = UUID()
+        _ = server.peerState.subscribe(peer, to: .state)
+        _ = server.peerState.subscribe(peer, to: .response)
+        server.stateCharacteristic = CBMutableCharacteristic(type: MdocGattServer.MdocServiceCharacteristic.state.uuid, properties: [.notify], value: nil, permissions: [])
+        server.server2ClientCharacteristic = CBMutableCharacteristic(type: MdocGattServer.MdocServiceCharacteristic.server2Client.uuid, properties: [.notify], value: nil, permissions: [])
+        server.finishResponse()
+        #expect(fixture.engagement.isSessionTerminated)
+        #expect(server.stateCharacteristic != nil && server.server2ClientCharacteristic != nil)
+        server.didUnsubscribe(peer)
+        #expect(server.stateCharacteristic == nil && server.server2ClientCharacteristic == nil)
+    }
+
+    @Test func admittedEngagementCleanupCannotDeleteReplacement() async throws {
+        let old = try await Fixture()
+        let fresh = try await Fixture()
+        let delegate = CleanupDelegate(engagement: fresh.engagement, session: fresh.session)
+        let server = MdocGattServer(peripheralManager: nil)
+        server.delegate = delegate
+        _ = try server.advertisingState.admit(old.engagement)
+        server.advertisedEngagement = old.engagement
+        await server.terminateSession()?.value
+        #expect(old.engagement.isSessionTerminated)
+        #expect(!fresh.engagement.isSessionTerminated)
+        #expect(delegate.deviceEngagement?.privateKey?.privateKeyId == fresh.engagement.privateKey?.privateKeyId)
+        #expect(delegate.sessionEncryption != nil)
+    }
+
+    @Test func replacingEngagementEndsOldTimerWithoutClearingNewSession() async throws {
+        let old = try await Fixture()
+        let delegate = CleanupDelegate(engagement: old.engagement, session: old.session)
+        let server = MdocGattServer(peripheralManager: nil)
+        server.delegate = delegate
+        server.advertisedEngagement = old.engagement
+        let clock = TimeoutTestClock()
+        server.monitorInactivity(using: clock.makeTimer())
+        clock.advance(100)
+        let fresh = try await Fixture()
+        delegate.deviceEngagement = fresh.engagement
+        delegate.sessionEncryption = fresh.session
+        server.monitorInactivity(using: clock.makeTimer())
+        #expect(old.engagement.isSessionTerminated)
+        #expect(!fresh.engagement.isSessionTerminated)
+        clock.advance(200)
+        clock.deliver()
+        #expect(!fresh.engagement.isSessionTerminated)
+        #expect(delegate.sessionEncryption != nil)
+        server.stop()
     }
     #endif
 
