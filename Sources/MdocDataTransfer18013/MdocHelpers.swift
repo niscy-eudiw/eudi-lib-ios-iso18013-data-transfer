@@ -118,30 +118,29 @@ public class MdocHelpers {
 		userRequestInfo: UserRequestInfo,
 		isValidRequest: Bool
 	), Error> {
+        guard let deviceEngagement else {
+            return .failure(Self.makeError(code: .deviceEngagementMissing))
+        }
+        guard deviceEngagement.claimSessionEstablishment() else {
+            return .failure(Self.makeError(code: .sessionAlreadyEstablished))
+        }
 		do {
 			guard let seCbor = try CBOR.decode([UInt8](requestData)) else {
 				logger.error("Request Data is not Cbor")
-				return .failure(Self.makeError(code: .requestDecodeError))
+				throw Self.makeError(code: .requestDecodeError)
 			}
 			var se = try SessionEstablishment(cbor: seCbor)
 			if se.eReaderKeyRawData == nil, let readerKeyRawData { se.eReaderKeyRawData = readerKeyRawData }
 			guard se.eReaderKey != nil else {
 				logger.error("Reader key not available")
-				return .failure(Self.makeError(code: .readerKeyMissing))
+				throw Self.makeError(code: .readerKeyMissing)
 			}
 			let requestCipherData = se.data
-			guard let deviceEngagement else {
-				logger.error("Device Engagement not initialized")
-				return .failure(Self.makeError(code: .deviceEngagementMissing))
-			}
 			// init session-encryption object from session establish message and device engagement, decrypt data
 			let sessionEncryption = SessionEncryption(se: se, de: deviceEngagement, handOver: handOver, authenticationContext: authenticationContext)
 			guard var sessionEncryption else {
 				logger.error("Session Encryption not initialized")
-				return .failure(Self.makeError(code: .sessionEncryptionNotInitialized))
-			}
-			guard deviceEngagement.claimSessionEstablishment() else {
-				return .failure(Self.makeError(code: .sessionAlreadyEstablished))
+				throw Self.makeError(code: .sessionEncryptionNotInitialized)
 			}
 			let requestData = try await sessionEncryption.decrypt(requestCipherData)
 			let deviceRequest = try DeviceRequest(data: requestData)
@@ -160,7 +159,7 @@ public class MdocHelpers {
 			)
 			guard let (previewDeviceResponse, validRequestItems, _, _, _, _) = requestResponse else {
 				logger.error("Valid request items nil")
-				return .failure(Self.makeError(code: .requestDecodeError))
+				throw Self.makeError(code: .requestDecodeError)
 			}
 			let isInvalidRequest = (previewDeviceResponse.documents == nil)
 			let requestedDocDataFormats = docs.mapValues { _ in DocDataFormat.cbor }
@@ -221,13 +220,18 @@ public class MdocHelpers {
 				}
 				userRequestInfo.readerAuthResults[docR.itemsRequest.docType] = readerValidation
 			}
+				try sessionEncryption.ensureActive()
 				return .success((
 					sessionEncryption: sessionEncryption,
 					deviceRequest: deviceRequest,
 					userRequestInfo: userRequestInfo,
 					isValidRequest: !isInvalidRequest
 				))
-		} catch { return .failure(error) }
+		} catch {
+            deviceEngagement.invalidateSession()
+            if let key = deviceEngagement.privateKey { await deleteMdocSessionKey(key) }
+            return .failure(error)
+        }
 	}
 
 	/// Construct ``DeviceResponse`` object to present from wallet data and input device request

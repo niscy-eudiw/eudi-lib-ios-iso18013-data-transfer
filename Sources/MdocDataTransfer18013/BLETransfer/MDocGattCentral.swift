@@ -32,6 +32,7 @@ public class MdocGattCentral: NSObject, MdocBleTransport, @unchecked Sendable {
 	public var error: Error? = nil {
 		didSet {
 			if let error {
+                terminateSession()
 				status = .error
 				delegate?.didFinishedWithError(error)
 			}
@@ -57,7 +58,8 @@ public class MdocGattCentral: NSObject, MdocBleTransport, @unchecked Sendable {
 		disconnectFromDevice()
 	}
 
-    public func startBleAdvertising() {      
+    public func startBleAdvertising() {
+        if centralManager?.state == .poweredOn { handleCentralPoweredOn() }
     }
 
     public func stopBleAdvertising() {
@@ -101,14 +103,31 @@ public class MdocGattCentral: NSObject, MdocBleTransport, @unchecked Sendable {
 		disconnect()
 	}
 
-	private func disconnect() {
-		if let peripheral {
-			centralManager.cancelPeripheralConnection(peripheral)
-			self.peripheral = nil
-		}
-		hasReaderIdentity = false
-		didSendStartRequest = false
-	}
+    private func disconnect() { terminateSession() }
+
+    @discardableResult
+    func terminateSession() -> Task<Void, Never>? {
+        centralManager?.stopScan()
+        let oldPeripheral = peripheral
+        peripheral = nil
+        oldPeripheral?.delegate = nil
+        if let oldPeripheral { centralManager?.cancelPeripheralConnection(oldPeripheral) }
+        hasReaderIdentity = false
+        didSendStartRequest = false
+        maximumCharacteristicSize = nil
+        writeCharacteristic = nil
+        readCharacteristic = nil
+        stateCharacteristic = nil
+        readBuffer.removeAll()
+        sendBuffer.removeAll()
+        return clearMdocSession(delegate)
+    }
+
+    // Used by tests without starting Bluetooth.
+    init(centralManager: CBCentralManager?) {
+        super.init()
+        self.centralManager = centralManager
+    }
 
 	public func sendData(_ data: Data) {
 		guard status == .requestReceived else {
@@ -123,9 +142,7 @@ public class MdocGattCentral: NSObject, MdocBleTransport, @unchecked Sendable {
 
 	private func writeNextBlock() {
 		guard !sendBuffer.isEmpty else {
-			status = .responseSent
-			logger.info("Finished sending BLE data")
-			status = .disconnected
+            finishResponse()
 			return
 		}
 		guard let writeCharacteristic else {
@@ -135,6 +152,13 @@ public class MdocGattCentral: NSObject, MdocBleTransport, @unchecked Sendable {
 		peripheral?.writeValue(sendBuffer.first!, for: writeCharacteristic, type: .withoutResponse)
 		if !sendBuffer.isEmpty { sendBuffer.removeFirst() }
 	}
+
+    func finishResponse() {
+        terminateSession()
+        status = .responseSent
+        logger.info("Finished sending BLE data")
+        status = .disconnected
+    }
 
 	private func getCharacteristic(
 		list: [CBCharacteristic],
@@ -206,9 +230,11 @@ public class MdocGattCentral: NSObject, MdocBleTransport, @unchecked Sendable {
 			case MdocServiceCharacteristic.state.uuid:
 				if data.count != 1 {
 					error = MdocHelpers.makeError(code: .bleInvalidStateLength)
+                    return
 				}
 				switch data[0] {
 				case BleTransferMode.END_REQUEST.first!: // 0x02:
+                    terminateSession()
 					status = .disconnected
 				case let byte:
 					logger.error("Unknown state \(byte)")
@@ -221,8 +247,10 @@ public class MdocGattCentral: NSObject, MdocBleTransport, @unchecked Sendable {
 				case .none:
 					error = MdocHelpers.makeError(code: .bleNoData)
 				case BleTransferMode.END_DATA.first!: // 0x00:
-					delegate?.didReceiveRequest(readBuffer)
+                    let request = readBuffer
+                    readBuffer.removeAll()
 					status = .requestReceived
+                    delegate?.didReceiveRequest(request)
 				case BleTransferMode.START_DATA.first!: break
 				case let .some(byte):
 					logger.error("Unknown data prefix \(byte)")
@@ -257,6 +285,7 @@ extension MdocGattCentral: CBCentralManagerDelegate {
 		advertisementData _: [String: Any],
 		rssi _: NSNumber
 	) {
+        guard status == .qrEngagementReady else { return }
 		logger.info("Discovered peripheral")
 		peripheral.delegate = self
 		self.peripheral = peripheral
@@ -265,16 +294,30 @@ extension MdocGattCentral: CBCentralManagerDelegate {
 	}
 
 	public func centralManager(_: CBCentralManager, didConnect peripheral: CBPeripheral) {
+        guard self.peripheral === peripheral else { return }
 		let serviceUuid = delegate?.deviceEngagement?.ble_uuid
 		peripheral.discoverServices([CBUUID(string: serviceUuid ?? "")])
 		delegate?.didConnected(isPeripheral: true, deviceName: peripheral.name)
 		status = .connected
 		tryStartRequestIfReady()
 	}
+    public func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
+        guard self.peripheral === peripheral else { return }
+        terminateSession()
+        status = .disconnected
+    }
+
+    public func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
+        guard self.peripheral === peripheral else { return }
+        terminateSession()
+        status = .disconnected
+    }
+
 }
 
 extension MdocGattCentral: CBPeripheralDelegate {
 	public func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
+        guard self.peripheral === peripheral else { return }
 		if let error {
 			self.error = error
 			return
@@ -288,6 +331,7 @@ extension MdocGattCentral: CBPeripheralDelegate {
 	}
 
 	public func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
+        guard self.peripheral === peripheral else { return }
 		if let error {
 			self.error = error
 			return
@@ -306,8 +350,10 @@ extension MdocGattCentral: CBPeripheralDelegate {
 	public func peripheral(
 		_ peripheral: CBPeripheral,
 		didUpdateValueFor characteristic: CBCharacteristic,
-		error _: Error?
+		error: Error?
 	) {
+        guard self.peripheral === peripheral else { return }
+        if let error { self.error = error; return }
 		do {
 			try processData(peripheral: peripheral, characteristic: characteristic)
 		} catch {
@@ -316,11 +362,13 @@ extension MdocGattCentral: CBPeripheralDelegate {
 		}
 	}
 
-	public func peripheralIsReady(toSendWriteWithoutResponse _: CBPeripheral) {
+	public func peripheralIsReady(toSendWriteWithoutResponse peripheral: CBPeripheral) {
+        guard self.peripheral === peripheral else { return }
 		writeNextBlock()
 	}
 
 	public func peripheral(_ peripheral: CBPeripheral, didModifyServices _: [CBService]) {
+        guard self.peripheral === peripheral else { return }
 		disconnectFromDevice()
 	}
 }

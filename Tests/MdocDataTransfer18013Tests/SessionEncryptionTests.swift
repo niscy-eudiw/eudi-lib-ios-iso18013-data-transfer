@@ -71,13 +71,133 @@ struct SessionEncryptionTests {
     }
 
     @Test func failedEstablishmentCannotBeRetriedWithTheSameEngagement() async throws {
-        let fixture = try await Fixture()
+        let storage = SessionTestKeyStorage()
+        let fixture = try await Fixture(storage: storage)
         let malformed = fixture.establishment(ciphertext: [0])
         if case .success = await fixture.decode(data: malformed) { Issue.record("Malformed ciphertext accepted") }
+        #expect(await storage.deletedIDs == [fixture.engagement.privateKey!.privateKeyId])
         switch await fixture.decode() {
         case .success: Issue.record("Consumed engagement was reused")
         case let .failure(error): #expect((error as NSError).code == ErrorCode.sessionAlreadyEstablished.rawValue)
         }
+    }
+
+    @Test func engagementTerminationRevokesSessionCopiesAndFutureDecode() async throws {
+        let fixture = try await Fixture()
+        var copy = fixture.session
+        fixture.engagement.invalidateSession()
+        await #expect(throws: SessionEncryptionError.sessionTerminated) { try await copy.encrypt([1]) }
+        await #expect(throws: (any Error).self) { try await fixture.decode().get() }
+        let fresh = try await Fixture()
+        _ = try await fresh.decode().get()
+    }
+
+    #if !os(watchOS)
+    @Test(arguments: [0, 1, 2])
+    func serverTerminalPathsClearStateAndDeleteOnlyOldKey(_ path: Int) async throws {
+        let storage = SessionTestKeyStorage()
+        let fixture = try await Fixture(storage: storage)
+        let delegate = CleanupDelegate(engagement: fixture.engagement, session: fixture.session)
+        let server = MdocGattServer(peripheralManager: nil)
+        server.delegate = delegate
+        server.sendBuffer = [Data([1,2])]
+        if path == 0 { server.stop() }
+        else if path == 1 { server.finishResponse() }
+        else { server.error = NSError(domain: "test", code: 1) }
+        #expect(delegate.deviceEngagement == nil)
+        #expect(delegate.sessionEncryption == nil)
+        #expect(delegate.qrCodePayload == nil)
+        #expect(server.sendBuffer.isEmpty)
+        #expect(server.remoteCentral == nil)
+        #expect(fixture.engagement.isSessionTerminated)
+        var copy = fixture.session
+        await #expect(throws: SessionEncryptionError.sessionTerminated) { try await copy.encrypt([1]) }
+        // Explicit cleanup is idempotent, even after the delegate has gone away.
+        server.delegate = nil
+        server.stop()
+    }
+
+    @Test func completedServerStillReportsDisconnectAndIgnoresOldPeerAfterRestart() async throws {
+        let fixture = try await Fixture()
+        let delegate = CleanupDelegate(engagement: fixture.engagement, session: fixture.session)
+        let server = MdocGattServer(peripheralManager: nil)
+        server.delegate = delegate
+        let oldPeer = UUID()
+        _ = server.peerState.subscribe(oldPeer, to: .state)
+        _ = server.peerState.subscribe(oldPeer, to: .response)
+        server.finishResponse()
+        #expect(server.status == .responseSent)
+        #expect(delegate.sessionEncryption == nil)
+        server.didUnsubscribe(oldPeer)
+        #expect(server.status == .disconnected)
+        let fresh = try await Fixture()
+        delegate.deviceEngagement = fresh.engagement
+        delegate.sessionEncryption = fresh.session
+        server.status = .qrEngagementReady
+        server.completedCentralID = oldPeer
+        server.didUnsubscribe(oldPeer)
+        #expect(server.status == .qrEngagementReady)
+        #expect(!fresh.engagement.isSessionTerminated)
+    }
+    #endif
+
+    @Test(arguments: [0, 1, 2])
+    func centralTerminalPathsClearBuffersAndNegotiation(_ path: Int) async throws {
+        let fixture = try await Fixture()
+        let delegate = CleanupDelegate(engagement: fixture.engagement, session: fixture.session)
+        let central = MdocGattCentral(centralManager: nil)
+        central.delegate = delegate
+        central.readBuffer = Data([9])
+        central.sendBuffer = [Data([8])]
+        central.hasReaderIdentity = true
+        central.didSendStartRequest = true
+        central.maximumCharacteristicSize = 200
+        if path == 0 { central.stop() }
+        else if path == 1 { central.finishResponse() }
+        else { central.error = NSError(domain: "test", code: 1) }
+        #expect(delegate.deviceEngagement == nil)
+        #expect(delegate.sessionEncryption == nil)
+        #expect(central.readBuffer.isEmpty && central.sendBuffer.isEmpty)
+        #expect(!central.hasReaderIdentity && !central.didSendStartRequest)
+        #expect(central.maximumCharacteristicSize == nil)
+        #expect(fixture.engagement.isSessionTerminated)
+        central.delegate = nil
+        central.stop()
+    }
+
+    @Test func delayedDeletionCannotClearReplacementEngagement() async throws {
+        let storage = SessionTestKeyStorage()
+        let old = try await Fixture(storage: storage)
+        let delegate = CleanupDelegate(engagement: old.engagement, session: old.session)
+        await storage.pauseDeletion()
+        let deletion = try #require(clearMdocSession(delegate))
+        await storage.waitForDeletion()
+        let replacement = try await Fixture()
+        delegate.deviceEngagement = replacement.engagement
+        delegate.sessionEncryption = replacement.session
+        delegate.qrCodePayload = "replacement"
+        await storage.resumeDeletion()
+        await deletion.value
+        #expect(delegate.deviceEngagement?.privateKey?.privateKeyId == replacement.engagement.privateKey?.privateKeyId)
+        #expect(delegate.qrCodePayload == "replacement")
+        #expect(!replacement.engagement.isSessionTerminated)
+        #expect(await storage.deletedIDs == [old.engagement.privateKey!.privateKeyId])
+        var session = replacement.session
+        #expect(try await session.encrypt([1]) != nil)
+    }
+
+    @Test func teardownDuringDecodeRejectsInFlightResult() async throws {
+        let storage = SessionTestKeyStorage()
+        let fixture = try await Fixture(storage: storage)
+        let delegate = CleanupDelegate(engagement: fixture.engagement, session: nil)
+        await storage.pauseRead()
+        async let result = fixture.decode()
+        await storage.waitForRead()
+        let deletion = clearMdocSession(delegate)
+        await storage.resumeRead()
+        if case .success = await result { Issue.record("Terminated request returned a live session") }
+        await deletion?.value
+        #expect(fixture.engagement.isSessionTerminated)
     }
 
     private struct Fixture: Sendable {
@@ -88,8 +208,8 @@ struct SessionEncryptionTests {
         let deviceSecret: SymmetricKey
         let readerSecret: SymmetricKey
 
-        init() async throws {
-            let area = SoftwareSecureArea.create(storage: SessionTestKeyStorage())
+        init(storage: SessionTestKeyStorage = SessionTestKeyStorage()) async throws {
+            let area = SoftwareSecureArea.create(storage: storage)
             var device = try #require(DeviceEngagement(supportsCentralClientMode: true, supportsPeripheralServerMode: true))
             try await device.makePrivateKey(secureArea: area, keyOptions: .init(curve: .P256))
             var reader = try await CoseKeyPrivate(secureArea: area, keyOptions: .init(curve: .P256))
@@ -158,13 +278,75 @@ private actor SessionTestKeyStorage: SecureKeyStorage {
     var info: [String: [String: Data]] = [:]
     var data: [String: [Int: [String: Data]]] = [:]
     func readKeyInfo(id: String) async throws -> [String: Data] { info[id] ?? [:] }
-    func readKeyData(id: String, index: Int, authenticationContext: ThreadSafeAuthContext) async throws -> [String: Data] { data[id]?[index] ?? [:] }
+    private var readPaused = false
+    private var readContinuation: CheckedContinuation<Void, Never>?
+    private var readWaiters: [CheckedContinuation<Void, Never>] = []
+    private var deletionPaused = false
+    private var deletionContinuation: CheckedContinuation<Void, Never>?
+    private var deletionWaiters: [CheckedContinuation<Void, Never>] = []
+    private(set) var deletedIDs: [String] = []
+    func pauseRead() { readPaused = true }
+    func waitForRead() async {
+        if readContinuation == nil { await withCheckedContinuation { readWaiters.append($0) } }
+    }
+    func resumeRead() { readContinuation?.resume(); readContinuation = nil }
+    func pauseDeletion() { deletionPaused = true }
+    func waitForDeletion() async {
+        if deletionContinuation == nil { await withCheckedContinuation { deletionWaiters.append($0) } }
+    }
+    func resumeDeletion() { deletionContinuation?.resume(); deletionContinuation = nil }
+    func readKeyData(id: String, index: Int, authenticationContext: ThreadSafeAuthContext) async throws -> [String: Data] {
+        if readPaused {
+            readPaused = false
+            await withCheckedContinuation { continuation in
+                readContinuation = continuation
+                readWaiters.forEach { $0.resume() }; readWaiters.removeAll()
+            }
+        }
+        return data[id]?[index] ?? [:]
+    }
     func writeKeyInfo(id: String, dict: [String: Data]) async throws { info[id] = dict }
     func writeKeyDataBatch(id: String, startIndex: Int, dicts: [[String: Data]], keyOptions: KeyOptions?) async throws {
         for (offset, dict) in dicts.enumerated() { data[id, default: [:]][startIndex + offset] = dict }
     }
     func deleteKeyBatch(id: String, startIndex: Int, batchSize: Int) async throws {
+        if deletionPaused {
+            deletionPaused = false
+            await withCheckedContinuation { continuation in
+                deletionContinuation = continuation
+                deletionWaiters.forEach { $0.resume() }; deletionWaiters.removeAll()
+            }
+        }
+        deletedIDs.append(id)
         for index in startIndex..<(startIndex + batchSize) { data[id]?[index] = nil }
     }
     func deleteKeyInfo(id: String) async throws { info[id] = nil }
+}
+
+private final class CleanupDelegate: MdocOfflineDelegate {
+    var deviceEngagement: DeviceEngagement?
+    var deviceRequest: DeviceRequest?
+    var sessionEncryption: SessionEncryption?
+    var docs: [String: IssuerSigned]! = [:]
+    var docMetadata: [String: Data?]! = [:]
+    var trustValidator: any CertificateTrustValidator = NoReaderTrust()
+    var privateKeyObjects: [String: CoseKeyPrivate]! = [:]
+    var dauthMethod: DeviceAuthMethod = .deviceSignature
+    var zkSystemRepository: ZkSystemRepository?
+    var readerName: String?
+    var qrCodePayload: String? = "old"
+    var unlockData: [String: Data]! = [:]
+    var deviceResponseBytes: Data? = Data([1])
+    var responseMetadata: [Data?]! = []
+    var zkpDocumentIds: [String]?
+    init(engagement: DeviceEngagement, session: SessionEncryption?) {
+        deviceEngagement = engagement
+        sessionEncryption = session
+    }
+    func didChangeStatus(_ newStatus: TransferStatus) {}
+    func didFinishedWithError(_ error: Error) {}
+    func didReceiveRequest(_ data: Data) {}
+    func didPoweredOn(isPeripheralManager: Bool) {}
+    func didConnected(isPeripheral: Bool, deviceName: String?) {}
+    func didPublishedPsmChannel(psm: UInt16?) {}
 }
