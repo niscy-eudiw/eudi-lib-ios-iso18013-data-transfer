@@ -13,7 +13,7 @@ let package = Package(
             targets: ["MdocDataTransfer18013"]),
     ],
     dependencies: [
-		.package(url: "https://github.com/eu-digital-identity-wallet/eudi-lib-ios-iso18013-security", exact: "0.28.1"),
+		.package(url: "https://github.com/niscy-eudiw/eudi-lib-ios-iso18013-security.git", revision: "9f12e4dfb5f1b40faf7ad8585c14f4b9d3932517"),
 		.package(url: "https://github.com/apple/swift-docc-plugin", from: "1.5.0"),
     ],
     targets: [

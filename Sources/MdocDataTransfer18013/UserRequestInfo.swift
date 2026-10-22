@@ -41,6 +41,9 @@ public struct UserRequestInfo: Sendable {
 	public var itemsRequested: RequestItems
 	/// reader Authentication results (per doc type)
 	public var readerAuthResults: [DocType: ReaderAuthenticationResult] = [:]
+    /// Individual request-wide signatures, in wire order. Per-document verdicts require all
+    /// supplied signatures to validate; use this array to display multiple reader identities.
+    public var readerAuthAllResults: [ReaderAuthenticationResult] = []
 	/// transaction data requested
 	public var transactionDataRequested: RequestTransactionData?
 	/// verifier info for items requested (format and data)
@@ -48,9 +51,13 @@ public struct UserRequestInfo: Sendable {
 	/// optional request name
 	public var requestName: String?
 
-	/// default reader authentication result (if docType specific result is not available)
+	/// A shared reader identity, when all document verdicts authenticate with the same leaf certificate.
 	public var defaultReaderAuthResult: ReaderAuthenticationResult? {
-		readerAuthResults[""] ?? readerAuthResults.first?.value
+        guard let key = readerAuthResults.keys.sorted().first, let result = readerAuthResults[key] else { return nil }
+        if readerAuthResults.count == 1 { return result }
+        guard result.isValidated, let leaf = result.certificateChain?.first, !leaf.isEmpty,
+              readerAuthResults.values.allSatisfy({ $0.isValidated && $0.certificateChain?.first == leaf }) else { return nil }
+        return result
 	}
 
 }

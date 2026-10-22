@@ -141,6 +141,8 @@ public class MdocHelpers {
 			}
 			let requestData = try await sessionEncryption.decrypt(requestCipherData)
 			let deviceRequest = try DeviceRequest(data: requestData)
+            let authentication = await readerAuthenticationResults(for: deviceRequest,
+                transcript: sessionEncryption.sessionTranscript, trustValidator: trustValidator)
 			let requestResponse = try await Self.getDeviceResponseToSend(
 				deviceRequest: deviceRequest,
 				issuerSigned: docs,
@@ -166,57 +168,8 @@ public class MdocHelpers {
 				deviceRequestBytes: Data(requestData),
 				requestName: "BLE"
 			)
-			for docR in deviceRequest.docRequests {
-				let mdocAuth = MdocReaderAuthentication(transcript: sessionEncryption.sessionTranscript)
-				let readerValidation: ReaderAuthenticationResult
-				if let readerAuthRawCBOR = docR.readerAuthRawCBOR {
-					let authBytes = Data(readerAuthRawCBOR.encode())
-					let certData = docR.readerCertificates
-					if certData.count > 0, let x509 = try? X509.Certificate(derEncoded: [UInt8](certData.first!)) {
-						let certificateIssuer = MdocHelpers.getCN(from: x509.subject.description)
-						do {
-							let itemsRequestRawData = docR.itemsRequestRawData!
-							let (isValidated, validationMessage) = try await mdocAuth.validateReaderAuth(
-								readerAuthCBOR: readerAuthRawCBOR,
-								readerAuthX5c: certData,
-								itemsRequestRawData: itemsRequestRawData,
-								trustValidator: trustValidator
-							)
-							readerValidation = ReaderAuthenticationResult(
-								isValidated: isValidated,
-								certificateIssuer: certificateIssuer,
-								validationMessage: validationMessage,
-								authBytes: authBytes,
-								certificateChain: certData
-							)
-						} catch {
-							logger.warning("Reader auth validation failed: \(error.localizedDescription)")
-							let failureDescription = "Reader auth validation failed: \(error.localizedDescription)"
-							readerValidation = ReaderAuthenticationResult(
-								isValidated: false,
-								certificateIssuer: certificateIssuer,
-								validationMessage: failureDescription,
-								authBytes: authBytes,
-								certificateChain: certData
-							)
-						}
-					} else {
-						logger.warning("Reader certificate missing or malformed")
-						readerValidation = ReaderAuthenticationResult(
-							isValidated: false,
-							validationMessage: "Reader certificate missing or malformed",
-							authBytes: authBytes
-						)
-					}
-				} else {
-					logger.warning("Reader authentication not present in request")
-					readerValidation = ReaderAuthenticationResult(
-						isValidated: false,
-						validationMessage: "Reader authentication not present in request"
-					)
-				}
-				userRequestInfo.readerAuthResults[docR.itemsRequest.docType] = readerValidation
-			}
+            userRequestInfo.readerAuthResults = authentication.documents
+            userRequestInfo.readerAuthAllResults = authentication.all
 				return .success((
 					sessionEncryption: sessionEncryption,
 					deviceRequest: deviceRequest,
